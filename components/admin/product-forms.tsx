@@ -97,6 +97,7 @@ export function ProductDetailsForm({
     description: string
     details: string
     featured: boolean
+    preLoved: boolean
   }
 }) {
   const { state, onSubmit, pending } = useFormAction(action)
@@ -146,6 +147,12 @@ export function ProductDetailsForm({
         />
         <p className="field-hint">Each line shows as its own point under the description.</p>
       </div>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" name="preLoved" defaultChecked={product.preLoved} className="h-4 w-4 accent-plum" />
+        <span>
+          Pre-loved <span className="text-sm text-muted">(thrift: shown with a “Pre-loved” label)</span>
+        </span>
+      </label>
       <label className="flex items-center gap-2">
         <input type="checkbox" name="featured" defaultChecked={product.featured} className="h-4 w-4 accent-plum" />
         <span>

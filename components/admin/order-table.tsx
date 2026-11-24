@@ -33,11 +33,15 @@ export function OrderTable({
               </td>
               <td className="py-3">
                 {o.customerName}
-                <span className="block text-muted">{[o.shipCity, o.shipRegion].filter(Boolean).join(', ')}</span>
+                <span className="block text-muted">
+                  {o.fulfillment === 'pickup'
+                    ? 'Pickup at the shop'
+                    : [o.shipCity, o.shipRegion].filter(Boolean).join(', ')}
+                </span>
               </td>
               <td className="py-3 text-muted">{formatDate(o.createdAt)}</td>
               <td className="py-3">
-                <OrderBadge status={o.status} />
+                <OrderBadge status={o.status} fulfillment={o.fulfillment} />
                 {flagged.includes(o.id) && (
                   <span className="mt-1 block text-xs font-bold text-rose">Payment needs attention</span>
                 )}

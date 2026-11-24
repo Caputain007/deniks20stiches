@@ -5,7 +5,16 @@ import { useId, useState } from 'react'
 import type { CatalogSize } from '@/lib/catalog'
 import { BAG_MAX_QTY, useBag } from './bag-store'
 
-export function AddToBag({ sizes, productName }: { sizes: CatalogSize[]; productName: string }) {
+export function AddToBag({
+  sizes,
+  productName,
+  sizeGuide,
+}: {
+  sizes: CatalogSize[]
+  productName: string
+  /** Link to the size chart, for products sold in sizes. */
+  sizeGuide?: string
+}) {
   const bag = useBag()
   const groupId = useId()
   const available = sizes.filter((s) => s.stock > 0)
@@ -72,6 +81,13 @@ export function AddToBag({ sizes, productName }: { sizes: CatalogSize[]; product
           })}
         </div>
       </fieldset>
+      {sizeGuide && (
+        <p className="mt-3 text-sm">
+          <Link href={sizeGuide} className="font-semibold text-plum">
+            Find your size
+          </Link>
+        </p>
+      )}
 
       {selected && selected.stock <= 3 && (
         <p className="mt-3 text-sm font-semibold text-rose">Only {selected.stock} left in this size.</p>

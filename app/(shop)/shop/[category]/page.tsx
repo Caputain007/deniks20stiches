@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { Suspense } from 'react'
 import { GridSkeleton, Listing, SortLinks, sortProducts } from '@/components/shop/shop-listing'
 import { getCatalog } from '@/lib/catalog'
+import { getSettings, whatsappLink } from '@/lib/settings'
 
 export async function generateMetadata({ params }: PageProps<'/shop/[category]'>): Promise<Metadata> {
   const { category } = await params
@@ -34,7 +35,12 @@ export default function CategoryPage(props: PageProps<'/shop/[category]'>) {
 }
 
 async function CategoryListing({ params, searchParams }: PageProps<'/shop/[category]'>) {
-  const [{ category }, { sort }, { categories, products }] = await Promise.all([params, searchParams, getCatalog()])
+  const [{ category }, { sort }, { categories, products }, settings] = await Promise.all([
+    params,
+    searchParams,
+    getCatalog(),
+    getSettings(),
+  ])
   const current = categories.find((c) => c.slug === category)
   if (!current) notFound()
   const inCategory = products.filter((p) => p.category?.slug === current.slug)
@@ -49,15 +55,26 @@ async function CategoryListing({ params, searchParams }: PageProps<'/shop/[categ
       </p>
       <h1 className="mt-2 text-4xl sm:text-5xl">{current.name}</h1>
       {current.description && <p className="mt-3 max-w-[60ch] text-muted">{current.description}</p>}
-      <div className="mb-8 mt-4 flex flex-wrap items-baseline justify-between gap-4">
-        <p className="text-muted">
-          {inCategory.length} {inCategory.length === 1 ? 'piece' : 'pieces'}
-        </p>
-        <SortLinks basePath={`/shop/${current.slug}`} current={sort} />
-      </div>
+      {inCategory.length > 0 ? (
+        <div className="mb-8 mt-4 flex flex-wrap items-baseline justify-between gap-4">
+          <p className="text-muted">
+            {inCategory.length} {inCategory.length === 1 ? 'piece' : 'pieces'}
+          </p>
+          <SortLinks basePath={`/shop/${current.slug}`} current={sort} />
+        </div>
+      ) : (
+        <div className="mt-8" />
+      )}
       <Listing
         products={sortProducts(inCategory, sort)}
-        emptyText={`No ${current.name.toLowerCase()} in stock right now. Check back soon.`}
+        emptyText={`New ${current.name.toLowerCase()} are on the way. Ask us on WhatsApp what’s in the shop today.`}
+        emptyAction={(() => {
+          const href = whatsappLink(
+            settings.whatsapp,
+            `Hello Deniks20 Stitches, which ${current.name.toLowerCase()} do you have at the moment?`,
+          )
+          return href ? { href, label: 'Ask on WhatsApp' } : null
+        })()}
       />
     </>
   )

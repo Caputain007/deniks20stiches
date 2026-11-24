@@ -31,8 +31,11 @@ export function ProductCard({ product, priority = false }: { product: CatalogPro
             className="absolute inset-0 hidden h-full w-full object-cover opacity-0 transition-opacity duration-300 group-hover:opacity-100 md:block"
           />
         )}
-        {!product.inStock && (
-          <span className="absolute left-3 top-3 bg-white/95 px-2.5 py-1 text-xs font-bold text-ink">Sold out</span>
+        {(!product.inStock || product.preLoved) && (
+          <span className="absolute left-3 top-3 flex flex-col items-start gap-1">
+            {!product.inStock && <span className="bg-white/95 px-2.5 py-1 text-xs font-bold text-ink">Sold out</span>}
+            {product.preLoved && <span className="bg-white/95 px-2.5 py-1 text-xs font-bold text-plum">Pre-loved</span>}
+          </span>
         )}
       </div>
       <div className="mt-3">

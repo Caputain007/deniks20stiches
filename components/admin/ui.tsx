@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import type { OrderStatus, ProductStatus } from '@/lib/db/schema'
+import type { Fulfillment, OrderStatus, ProductStatus } from '@/lib/db/schema'
 
 export function PageHeader({
   title,
@@ -33,8 +33,17 @@ const ORDER_STYLES: Record<OrderStatus, { label: string; className: string }> = 
   cancelled: { label: 'Cancelled', className: 'bg-line/60 text-muted' },
 }
 
-export function OrderBadge({ status }: { status: OrderStatus }) {
-  const s = ORDER_STYLES[status]
+const PICKUP_LABELS: Partial<Record<OrderStatus, string>> = {
+  paid: 'To prepare for pickup',
+  shipped: 'Ready to collect',
+  delivered: 'Collected',
+}
+
+export function OrderBadge({ status, fulfillment = 'delivery' }: { status: OrderStatus; fulfillment?: Fulfillment }) {
+  const s = {
+    ...ORDER_STYLES[status],
+    ...(fulfillment === 'pickup' && PICKUP_LABELS[status] ? { label: PICKUP_LABELS[status] } : {}),
+  }
   return (
     <span className={`inline-block whitespace-nowrap px-2 py-0.5 text-xs font-bold ${s.className}`}>{s.label}</span>
   )
@@ -92,8 +101,18 @@ export function formatDate(date: Date | null | undefined) {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
-    hour: 'numeric',
+    hour: '2-digit',
     minute: '2-digit',
+    hourCycle: 'h23',
     timeZone: 'Africa/Lagos',
   }).format(date)
+}
+
+export function StatusPill({ tone, children }: { tone: 'live' | 'waiting' | 'off'; children: React.ReactNode }) {
+  const styles = {
+    live: 'bg-leaf/10 text-leaf',
+    waiting: 'bg-amber/10 text-amber',
+    off: 'bg-line/60 text-muted',
+  }
+  return <span className={`inline-block px-2 py-0.5 text-xs font-bold ${styles[tone]}`}>{children}</span>
 }

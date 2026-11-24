@@ -6,9 +6,13 @@ import { usePathname } from 'next/navigation'
 export const ADMIN_LINKS = [
   { href: '/admin', label: 'Dashboard' },
   { href: '/admin/orders', label: 'Orders' },
+  { href: '/admin/measurements', label: 'Measurements' },
   { href: '/admin/products', label: 'Products' },
   { href: '/admin/categories', label: 'Categories' },
-  { href: '/admin/delivery', label: 'Delivery fees' },
+  { href: '/admin/banners', label: 'Banners' },
+  { href: '/admin/coupons', label: 'Coupons' },
+  { href: '/admin/whatsapp', label: 'WhatsApp' },
+  { href: '/admin/delivery', label: 'Delivery' },
   { href: '/admin/settings', label: 'Settings' },
 ]
 

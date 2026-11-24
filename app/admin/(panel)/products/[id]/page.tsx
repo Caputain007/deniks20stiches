@@ -89,6 +89,7 @@ export default async function EditProductPage({ params, searchParams }: PageProp
                 description: product.description,
                 details: product.details,
                 featured: product.featured,
+                preLoved: product.condition === 'pre_loved',
               }}
             />
           </Panel>

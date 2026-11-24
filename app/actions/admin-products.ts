@@ -104,6 +104,7 @@ export async function saveProductDetails(
       compareAtKobo,
       categoryId: await categoryIdOrNull(formData.get('categoryId')),
       featured: formData.get('featured') === 'on',
+      condition: formData.get('preLoved') === 'on' ? 'pre_loved' : 'new',
       updatedAt: new Date(),
     })
     .where(eq(schema.products.id, productId))

@@ -196,6 +196,73 @@
   }
 }
 
+/* The measuring figure: guides are faint stitches; the one being measured is sewn in plum. */
+.measure-figure {
+  display: block;
+  overflow: visible;
+}
+.measure-body {
+  fill: var(--color-blush);
+  stroke: #cdb8cf;
+  stroke-width: 1.2;
+}
+.measure-shade {
+  fill: #e7d8e9;
+  stroke: #cdb8cf;
+  stroke-width: 1.2;
+}
+.measure-face {
+  fill: var(--color-mist);
+  stroke: #cdb8cf;
+  stroke-width: 1;
+}
+.measure-floor {
+  stroke: var(--color-line);
+  stroke-width: 1.5;
+}
+.measure-guide {
+  fill: none;
+  stroke: var(--color-muted);
+  stroke-opacity: 0.3;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.measure-active {
+  fill: none;
+  stroke: var(--color-plum);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 6 4;
+  animation: stitch-in 0.9s ease-out both;
+}
+.measure-tick {
+  stroke-dasharray: none;
+}
+.measure-label rect {
+  fill: var(--color-mist);
+  fill-opacity: 0.94;
+}
+.measure-label text {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 650;
+  fill: var(--color-plum);
+}
+.measure-label text.value {
+  fill: var(--color-ink);
+  font-weight: 750;
+}
+@keyframes stitch-in {
+  from {
+    stroke-dashoffset: 30;
+    opacity: 0.25;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
 /* Horizontal photo strip on phones */
 .snap-strip {
   scroll-snap-type: x mandatory;

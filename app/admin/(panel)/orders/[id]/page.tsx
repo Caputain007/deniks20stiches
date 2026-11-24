@@ -3,9 +3,15 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { desc, eq } from 'drizzle-orm'
 import { notFound } from 'next/navigation'
-import { markShipped, resolvePaymentIssue, saveOrderNotes, setOrderStatus } from '@/app/actions/admin-shop'
+import {
+  markReadyForPickup,
+  markShipped,
+  resolvePaymentIssue,
+  saveOrderNotes,
+  setOrderStatus,
+} from '@/app/actions/admin-shop'
 import { ActionButton } from '@/components/admin/action-button'
-import { CopyButton, NotesForm, PrintButton, ShipForm } from '@/components/admin/order-forms'
+import { CopyButton, NotesForm, PickupReadyForm, PrintButton, ShipForm } from '@/components/admin/order-forms'
 import { formatDate, Notice, OrderBadge, PageHeader, Panel } from '@/components/admin/ui'
 import { requireAdmin } from '@/lib/auth'
 import { getDb, schema } from '@/lib/db'
@@ -36,14 +42,19 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
     .orderBy(desc(schema.paymentEvents.createdAt))
     .limit(5)
 
-  const addressLines = [
-    order.customerName,
-    order.shipAddress1,
-    order.shipAddress2,
-    [order.shipCity, order.shipRegion, order.shipPostcode].filter(Boolean).join(', '),
-    countryName(order.shipCountry),
-    order.phone,
-  ].filter(Boolean)
+  const pickup = order.fulfillment === 'pickup'
+  const addressLines = (
+    pickup
+      ? [order.customerName, order.phone]
+      : [
+          order.customerName,
+          order.shipAddress1,
+          order.shipAddress2,
+          [order.shipCity, order.shipRegion, order.shipPostcode].filter(Boolean).join(', '),
+          countryName(order.shipCountry),
+          order.phone,
+        ]
+  ).filter(Boolean)
   const customerWhatsapp = whatsappLink(
     order.phone,
     `Hello ${order.customerName}, this is Deniks20 Stitches about your order ${order.number}.`,
@@ -57,11 +68,19 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
       </PageHeader>
 
       <div className="mb-6 flex flex-wrap items-center gap-3 text-sm">
-        <OrderBadge status={order.status} />
+        <OrderBadge status={order.status} fulfillment={order.fulfillment} />
         <span className="text-muted">Placed {formatDate(order.createdAt)}</span>
         {order.paidAt && <span className="text-muted">Paid {formatDate(order.paidAt)}</span>}
-        {order.shippedAt && <span className="text-muted">Shipped {formatDate(order.shippedAt)}</span>}
-        {order.deliveredAt && <span className="text-muted">Delivered {formatDate(order.deliveredAt)}</span>}
+        {order.shippedAt && (
+          <span className="text-muted">
+            {pickup ? 'Ready to collect' : 'Shipped'} {formatDate(order.shippedAt)}
+          </span>
+        )}
+        {order.deliveredAt && (
+          <span className="text-muted">
+            {pickup ? 'Collected' : 'Delivered'} {formatDate(order.deliveredAt)}
+          </span>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -125,9 +144,24 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
                 <dd>{formatNaira(order.subtotalKobo)}</dd>
               </div>
               <div className="flex justify-between">
-                <dt>Delivery{order.shippingEta ? ` (${order.shippingEta})` : ''}</dt>
-                <dd>{formatNaira(order.shippingKobo)}</dd>
+                <dt>{pickup ? 'Pickup' : `Delivery${order.shippingEta ? ` (${order.shippingEta})` : ''}`}</dt>
+                <dd>{pickup ? 'Free' : formatNaira(order.shippingKobo)}</dd>
               </div>
+              {order.discountKobo > 0 && (
+                <div className="flex justify-between">
+                  <dt>
+                    Coupon{' '}
+                    {order.couponId ? (
+                      <Link href="/admin/coupons" className="font-semibold">
+                        {order.couponCode}
+                      </Link>
+                    ) : (
+                      order.couponCode
+                    )}
+                  </dt>
+                  <dd>−{formatNaira(order.discountKobo)}</dd>
+                </div>
+              )}
               <div className="flex justify-between text-base font-bold">
                 <dt>Total</dt>
                 <dd>{formatNaira(order.totalKobo)}</dd>
@@ -136,7 +170,16 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
           </Panel>
 
           <div className="no-print">
-            {(order.status === 'paid' || order.status === 'shipped') && (
+            {pickup && (order.status === 'paid' || order.status === 'shipped') && (
+              <Panel title={order.status === 'paid' ? 'Ready to collect?' : 'Ready to collect'}>
+                <PickupReadyForm
+                  action={markReadyForPickup.bind(null, order.id)}
+                  canEmail={emailConfigured()}
+                  readySince={order.status === 'shipped' && order.shippedAt ? formatDate(order.shippedAt) : null}
+                />
+              </Panel>
+            )}
+            {!pickup && (order.status === 'paid' || order.status === 'shipped') && (
               <Panel title={order.status === 'paid' ? 'Ship this order' : 'Tracking'}>
                 <ShipForm
                   action={markShipped.bind(null, order.id)}
@@ -158,7 +201,7 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
         </div>
 
         <div className="space-y-6">
-          <Panel title="Deliver to">
+          <Panel title={pickup ? 'Collects from the shop' : 'Deliver to'}>
             <address className="not-italic leading-relaxed">
               {addressLines.map((line) => (
                 <span key={line} className="block">
@@ -171,9 +214,11 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
                 <span className="font-semibold">Customer note:</span> {order.deliveryNote}
               </p>
             )}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <CopyButton text={addressLines.join('\n')} label="Copy address" />
-            </div>
+            {!pickup && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <CopyButton text={addressLines.join('\n')} label="Copy address" />
+              </div>
+            )}
           </Panel>
 
           <Panel title="Customer">
@@ -231,11 +276,13 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
                   action={setOrderStatus.bind(null, order.id, 'delivered')}
                   className="btn btn-quiet btn-sm"
                 >
-                  Mark as delivered
+                  {pickup ? 'Mark as collected' : 'Mark as delivered'}
                 </ActionButton>
               )}
               {order.status === 'delivered' && (
-                <ActionButton action={setOrderStatus.bind(null, order.id, 'paid')}>Undo delivered</ActionButton>
+                <ActionButton action={setOrderStatus.bind(null, order.id, 'paid')}>
+                  {pickup ? 'Undo collected' : 'Undo delivered'}
+                </ActionButton>
               )}
               {(order.status === 'pending' || order.status === 'paid') && (
                 <ActionButton

@@ -1,5 +1,7 @@
 import 'server-only'
+import type { MeasurementPurpose } from './db/schema'
 import { countryName } from './geo'
+import { formatMeasure, MEASUREMENTS, type Unit } from './measurements'
 import { formatNaira } from './money'
 import type { Order, OrderItem, PaymentIssue } from './orders'
 
@@ -51,11 +53,13 @@ function itemsTable(order: Order, items: OrderItem[]): string {
     )
     .join('')
   return `<table style="width:100%;border-collapse:collapse;font-size:15px">${rows}
-<tr><td style="padding:8px 0">Delivery</td><td style="padding:8px 0;text-align:right">${formatNaira(order.shippingKobo)}</td></tr>
+<tr><td style="padding:8px 0">${order.fulfillment === 'pickup' ? 'Pickup' : 'Delivery'}</td><td style="padding:8px 0;text-align:right">${order.fulfillment === 'pickup' ? 'Free' : formatNaira(order.shippingKobo)}</td></tr>
+${order.discountKobo > 0 ? `<tr><td style="padding:8px 0">Coupon ${esc(order.couponCode)}</td><td style="padding:8px 0;text-align:right">−${formatNaira(order.discountKobo)}</td></tr>` : ''}
 <tr><td style="padding:8px 0;font-weight:bold">Total</td><td style="padding:8px 0;text-align:right;font-weight:bold">${formatNaira(order.totalKobo)}</td></tr></table>`
 }
 
 function address(order: Order): string {
+  if (order.fulfillment === 'pickup') return [order.customerName, order.phone].filter(Boolean).map(esc).join('<br>')
   return [
     order.customerName,
     order.shipAddress1,
@@ -69,16 +73,27 @@ function address(order: Order): string {
     .join('<br>')
 }
 
-export async function sendOrderPaidEmails(order: Order, items: OrderItem[], origin: string, shopEmail: string) {
+export async function sendOrderPaidEmails(
+  order: Order,
+  items: OrderItem[],
+  origin: string,
+  shop: { email: string; address: string; pickupNote: string },
+) {
   const link = `${origin}/order/${order.number}?key=${order.accessKey}`
+  const pickup = order.fulfillment === 'pickup'
+  const shopEmail = shop.email
   await send(
     order.email,
     `Order ${order.number} confirmed`,
     layout(
       'Thank you for your order',
-      `<p style="line-height:1.6">We've received your payment for order <strong>${esc(order.number)}</strong> and we're getting it ready. We'll email you again when it ships.</p>
+      `<p style="line-height:1.6">We've received your payment for order <strong>${esc(order.number)}</strong> and we're getting it ready. ${pickup ? "We'll let you know when it's ready to collect." : "We'll email you again when it ships."}</p>
 ${itemsTable(order, items)}
-<p style="line-height:1.6;margin-top:24px"><strong>Delivering to</strong><br>${address(order)}</p>
+${
+  pickup
+    ? `<p style="line-height:1.6;margin-top:24px"><strong>Collect from</strong><br>${esc(shop.address)}${shop.pickupNote ? `<br><span style="color:#6e5d73">${esc(shop.pickupNote)}</span>` : ''}</p>`
+    : `<p style="line-height:1.6;margin-top:24px"><strong>Delivering to</strong><br>${address(order)}</p>`
+}
 <p style="margin-top:24px"><a href="${esc(link)}" style="color:#4c2071">View your order</a></p>`,
     ),
     shopEmail || undefined,
@@ -92,7 +107,7 @@ ${itemsTable(order, items)}
       layout(
         `New paid order ${order.number}`,
         `${itemsTable(order, items)}
-<p style="line-height:1.6;margin-top:24px"><strong>Ship to</strong><br>${address(order)}<br>${esc(order.email)}</p>
+<p style="line-height:1.6;margin-top:24px"><strong>${pickup ? 'Customer collects from the shop' : 'Ship to'}</strong><br>${address(order)}<br>${esc(order.email)}</p>
 ${order.deliveryNote ? `<p style="line-height:1.6"><strong>Delivery note</strong><br>${esc(order.deliveryNote)}</p>` : ''}
 <p style="margin-top:24px"><a href="${esc(origin)}/admin/orders/${order.id}" style="color:#4c2071">Open in admin</a></p>`,
       ),
@@ -100,8 +115,28 @@ ${order.deliveryNote ? `<p style="line-height:1.6"><strong>Delivery note</strong
   }
 }
 
-export async function sendOrderShippedEmail(order: Order, origin: string, shopEmail: string) {
+export async function sendOrderShippedEmail(
+  order: Order,
+  origin: string,
+  shop: { email: string; address: string; hours: string },
+) {
   const link = `${origin}/order/${order.number}?key=${order.accessKey}`
+  const shopEmail = shop.email
+  if (order.fulfillment === 'pickup') {
+    await send(
+      order.email,
+      `Order ${order.number} is ready to collect`,
+      layout(
+        'Your order is ready to collect',
+        `<p style="line-height:1.6">Order <strong>${esc(order.number)}</strong> is ready for you at our shop.</p>
+<p style="line-height:1.6"><strong>Collect from</strong><br>${esc(shop.address)}${shop.hours ? `<br>Open ${esc(shop.hours)}` : ''}</p>
+<p style="line-height:1.6">Bring your order number. If someone else is collecting it for you, reply to this email with their name.</p>
+<p style="margin-top:24px"><a href="${esc(link)}" style="color:#4c2071">View your order</a></p>`,
+      ),
+      shopEmail || undefined,
+    )
+    return
+  }
   const tracking = order.trackingNumber
     ? `<p style="line-height:1.6"><strong>Tracking</strong><br>${esc(order.courier || 'Courier')}: ${esc(order.trackingNumber)}${order.trackingUrl ? `<br><a href="${esc(order.trackingUrl)}" style="color:#4c2071">Track the delivery</a>` : ''}</p>`
     : ''
@@ -129,5 +164,50 @@ export async function sendPaymentIssueEmail(order: Order, issue: PaymentIssue, o
       `<p style="line-height:1.6">${esc(issue.message)}</p>
 <p style="margin-top:24px"><a href="${esc(origin)}/admin/orders/${order.id}" style="color:#4c2071">Open order ${esc(order.number)} in admin</a></p>`,
     ),
+  )
+}
+
+const PURPOSES: Record<MeasurementPurpose, string> = {
+  bespoke: 'A bespoke outfit',
+  alteration: 'Adjusting something they bought',
+  keep: 'To keep on file',
+}
+
+export async function sendMeasurementAlert(
+  request: {
+    id: number
+    reference: string
+    name: string
+    phone: string
+    email: string
+    purpose: MeasurementPurpose
+    unit: Unit
+    values: Record<string, number>
+    notes: string
+    orderNumber: string
+  },
+  origin: string,
+  shopEmail: string,
+) {
+  const to = process.env.ORDER_ALERT_EMAIL || shopEmail
+  if (!to) return
+  const rows = MEASUREMENTS.filter((m) => request.values[m.key] !== undefined)
+    .map(
+      (m) =>
+        `<tr><td style="padding:6px 0;border-bottom:1px solid #e0d3e0">${esc(m.label)}</td><td style="padding:6px 0;border-bottom:1px solid #e0d3e0;text-align:right">${esc(formatMeasure(request.values[m.key], request.unit))}</td></tr>`,
+    )
+    .join('')
+  await send(
+    to,
+    `New measurements from ${request.name} (${request.reference})`,
+    layout(
+      `New measurements: ${request.reference}`,
+      `<p style="line-height:1.6"><strong>${esc(request.name)}</strong><br>${esc(request.phone)}${request.email ? `<br>${esc(request.email)}` : ''}</p>
+<p style="line-height:1.6"><strong>For</strong><br>${esc(PURPOSES[request.purpose])}${request.orderNumber ? ` (order ${esc(request.orderNumber)})` : ''}</p>
+<table style="width:100%;border-collapse:collapse;font-size:15px">${rows}</table>
+${request.notes ? `<p style="line-height:1.6;margin-top:16px"><strong>Notes</strong><br>${esc(request.notes)}</p>` : ''}
+<p style="margin-top:24px"><a href="${esc(origin)}/admin/measurements/${request.id}" style="color:#4c2071">Open in admin</a></p>`,
+    ),
+    request.email || undefined,
   )
 }

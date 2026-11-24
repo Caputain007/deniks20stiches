@@ -6,19 +6,49 @@ import { AddToBag } from '@/components/shop/add-to-bag'
 import { Price } from '@/components/shop/price'
 import { ProductGrid } from '@/components/shop/product-card'
 import { ProductGallery } from '@/components/shop/product-gallery'
-import { getCatalog } from '@/lib/catalog'
-import { getSettings, whatsappLink } from '@/lib/settings'
+import { getCatalog, type CatalogProduct } from '@/lib/catalog'
+import { formatNaira } from '@/lib/money'
+import { getSettings, whatsappLink, whatsappShareLink } from '@/lib/settings'
+import { siteUrl } from '@/lib/site-url'
 
 export async function generateMetadata({ params }: PageProps<'/products/[slug]'>): Promise<Metadata> {
   const { slug } = await params
   const { products } = await getCatalog()
   const product = products.find((p) => p.slug === slug)
   if (!product) return { title: 'Not found' }
+  // WhatsApp and Facebook show og:title and og:description under the photo when a link is shared.
+  const price = formatNaira(product.priceKobo)
+  const was = product.compareAtKobo ? ` (was ${formatNaira(product.compareAtKobo)})` : ''
+  const description = `${price}${was}. ${product.description.slice(0, 140) || `${product.name} from Deniks20 Stitches.`}`
   return {
     title: product.name,
-    description: product.description.slice(0, 160) || `${product.name} from Deniks20 Stitches.`,
+    description,
     openGraph: {
+      title: `${product.name}: ${price}`,
+      description,
       images: [{ url: product.images[0].url, width: product.images[0].width, height: product.images[0].height }],
+    },
+  }
+}
+
+/** Product details for Google (price, stock, condition). */
+function productJsonLd(product: CatalogProduct, base: string | null) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    description: product.description || undefined,
+    image: product.images.map((i) => i.url),
+    sku: `DS-${product.id}`,
+    brand: { '@type': 'Brand', name: 'Deniks20 Stitches' },
+    category: product.category?.name,
+    itemCondition: product.preLoved ? 'https://schema.org/UsedCondition' : 'https://schema.org/NewCondition',
+    offers: {
+      '@type': 'Offer',
+      priceCurrency: 'NGN',
+      price: (product.priceKobo / 100).toFixed(2),
+      availability: product.inStock ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+      url: base ? `${base}/products/${product.slug}` : undefined,
     },
   }
 }
@@ -40,9 +70,18 @@ async function ProductDetails({ params }: Pick<PageProps<'/products/[slug]'>, 'p
     .filter((p) => p.id !== product.id && p.inStock && p.category?.slug === product.category?.slug)
     .slice(0, 4)
   const ask = whatsappLink(settings.whatsapp, `Hello Deniks20 Stitches, I'm interested in "${product.name}".`)
+  const base = siteUrl()
+  const share = base
+    ? whatsappShareLink(`${product.name}, ${formatNaira(product.priceKobo)}: ${base}/products/${product.slug}`)
+    : null
+  const sizeGuide = product.sizes.some((s) => !/^one size$/i.test(s.label)) ? '/measurements#size-chart' : undefined
 
   return (
     <div className="wrap pt-6 md:pt-10">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(productJsonLd(product, base)).replace(/</g, '\\u003c') }}
+      />
       <p className="text-sm text-muted">
         <Link href="/shop" className="hover:text-plum">
           Shop all
@@ -62,9 +101,16 @@ async function ProductDetails({ params }: Pick<PageProps<'/products/[slug]'>, 'p
 
         <div className="min-w-0 md:sticky md:top-6 md:self-start">
           <h1 className="text-[2.1rem] leading-tight sm:text-5xl">{product.name}</h1>
-          <Price kobo={product.priceKobo} compareAt={product.compareAtKobo} className="mt-3 block text-xl" />
+          <p className="mt-3 flex flex-wrap items-center gap-3">
+            <Price kobo={product.priceKobo} compareAt={product.compareAtKobo} className="text-xl" />
+            {product.preLoved && (
+              <span className="border border-dashed border-plum px-2 py-0.5 text-sm font-semibold text-plum">
+                Pre-loved
+              </span>
+            )}
+          </p>
 
-          <AddToBag sizes={product.sizes} productName={product.name} />
+          <AddToBag sizes={product.sizes} productName={product.name} sizeGuide={sizeGuide} />
 
           {product.description && (
             <div className="prose-shop mt-10 max-w-[60ch] whitespace-pre-line text-ink/90">{product.description}</div>
@@ -82,12 +128,20 @@ async function ProductDetails({ params }: Pick<PageProps<'/products/[slug]'>, 'p
           )}
 
           <div className="mt-8 space-y-2 border-t border-line pt-6 text-[0.95rem] text-muted">
+            {product.preLoved && <p>A pre-loved thrift piece, checked and cleaned. The photos show its condition.</p>}
             <p>Delivery across Nigeria and abroad. Your delivery fee is shown at checkout.</p>
             {ask && (
               <p>
                 Questions about fit or colour?{' '}
                 <a href={ask} className="font-semibold text-plum">
                   Ask us on WhatsApp
+                </a>
+              </p>
+            )}
+            {share && (
+              <p>
+                <a href={share} className="font-semibold text-plum" target="_blank" rel="noopener noreferrer">
+                  Share on WhatsApp
                 </a>
               </p>
             )}

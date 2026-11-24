@@ -1,36 +1,48 @@
 /* eslint-disable @next/next/no-img-element -- product photos are already resized on upload */
 import Image from 'next/image'
 import Link from 'next/link'
+import { BannerLink } from '@/components/shop/banner-link'
 import { ProductGrid } from '@/components/shop/product-card'
+import { getLiveBanners } from '@/lib/banners'
 import { getCatalog } from '@/lib/catalog'
-import { getSettings, whatsappLink } from '@/lib/settings'
+import { getSettings, pickupEnabled, whatsappLink } from '@/lib/settings'
 import editorial from '@/public/brand/editorial.webp'
 
 export default async function HomePage() {
-  const [{ categories, products }, settings] = await Promise.all([getCatalog(), getSettings()])
+  const [{ categories, products }, settings, { hero }] = await Promise.all([
+    getCatalog(),
+    getSettings(),
+    getLiveBanners(),
+  ])
   const featured = products.filter((p) => p.featured)
   const showcase = (featured.length >= 4 ? featured : products).slice(0, 8)
   const shelves = categories
     .filter((c) => c.productCount > 0)
     .map((c) => ({ ...c, cover: products.find((p) => p.category?.slug === c.slug)?.images[0] }))
   const wa = whatsappLink(settings.whatsapp, "Hello Deniks20 Stitches, I'd like to ask about your collection.")
-  const bespoke = whatsappLink(settings.whatsapp, "Hello Deniks20 Stitches, I'd like to ask about bespoke tailoring.")
 
   return (
     <>
       <section className="wrap grid pt-6 md:grid-cols-[5fr_7fr] md:pt-10">
         <div className="order-2 flex flex-col justify-center bg-blush px-6 py-10 md:order-1 md:px-12 md:py-16">
           <h1 className="text-[2.6rem] leading-[1.05] tracking-[-0.01em] sm:text-6xl lg:text-7xl">
-            Modest style for every day
+            {hero?.title || 'Modest style for every day'}
           </h1>
-          <p className="mt-6 max-w-[36ch] text-lg text-ink/85">
-            Ready-to-wear outfits, Malaysian hijabs and abayas, delivered across Nigeria and abroad. Bespoke tailoring
-            on request.
+          <p className="mt-6 max-w-[36ch] whitespace-pre-line text-lg text-ink/85">
+            {hero
+              ? hero.body
+              : 'Ready-to-wear outfits, Malaysian hijabs and abayas, delivered across Nigeria and abroad. Bespoke tailoring on request.'}
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link href="/shop" className="btn btn-primary">
-              Shop the collection
-            </Link>
+            {hero?.linkUrl ? (
+              <BannerLink href={hero.linkUrl} className="btn btn-primary">
+                {hero.linkLabel || 'Shop now'}
+              </BannerLink>
+            ) : (
+              <Link href="/shop" className="btn btn-primary">
+                Shop the collection
+              </Link>
+            )}
             {wa && (
               <a href={wa} className="btn btn-secondary">
                 Chat on WhatsApp
@@ -39,15 +51,26 @@ export default async function HomePage() {
           </div>
         </div>
         <div className="relative order-1 aspect-[3/2] md:order-2 md:aspect-auto md:min-h-[34rem]">
-          <Image
-            src={editorial}
-            alt="Two women wearing a deep plum and a dusty rose hijab with matching embroidered modest dresses"
-            fill
-            priority
-            sizes="(min-width: 768px) 58vw, 100vw"
-            className="object-cover"
-            placeholder="blur"
-          />
+          {hero?.imageUrl ? (
+            <img
+              src={hero.imageUrl}
+              alt=""
+              width={hero.imageWidth ?? undefined}
+              height={hero.imageHeight ?? undefined}
+              fetchPriority="high"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <Image
+              src={editorial}
+              alt="Two women wearing a deep plum and a dusty rose hijab with matching embroidered modest dresses"
+              fill
+              priority
+              sizes="(min-width: 768px) 58vw, 100vw"
+              className="object-cover"
+              placeholder="blur"
+            />
+          )}
         </div>
       </section>
 
@@ -119,20 +142,24 @@ export default async function HomePage() {
           <div className="bg-plum px-6 py-12 text-white md:px-12">
             <h2 className="text-3xl">Bespoke tailoring</h2>
             <p className="mt-4 max-w-[46ch] text-white/85">
-              Have a style in mind, or need a piece in your exact measurements? Tell us about it on WhatsApp and we’ll
-              talk you through fabric, fit and price.
+              Have a style in mind, or need a piece in your exact measurements? Measure yourself with our guide, send us
+              the numbers, and we’ll agree fabric, fit and price with you on WhatsApp.
             </p>
-            {bespoke && (
-              <a href={bespoke} className="btn mt-7 border-white bg-white text-plum hover:bg-blush">
-                Ask about tailoring
-              </a>
-            )}
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link href="/bespoke" className="btn border-white bg-white text-plum hover:bg-blush">
+                How bespoke works
+              </Link>
+              <Link href="/measurements" className="btn border-white/70 text-white hover:bg-plum-deep">
+                Measuring guide
+              </Link>
+            </div>
           </div>
           <div className="bg-mist px-6 py-12 md:px-12">
             <h2 className="text-3xl">Delivery and payment</h2>
             <ul className="mt-4 space-y-3 text-ink/85">
               <li>We deliver across Nigeria and abroad.</li>
               <li>Your delivery fee is shown at checkout, before you pay.</li>
+              {pickupEnabled(settings) && <li>Or collect your order free from our shop: {settings.address}.</li>}
               <li>Pay securely with Paystack: card, bank transfer or USSD.</li>
             </ul>
             <Link href="/track" className="mt-6 inline-block font-semibold text-plum">

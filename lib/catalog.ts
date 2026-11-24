@@ -19,11 +19,14 @@ export type CatalogProduct = {
   priceKobo: number
   compareAtKobo: number | null
   featured: boolean
+  /** Thrift pieces are sold as pre-loved. */
+  preLoved: boolean
   category: { name: string; slug: string } | null
   images: CatalogImage[]
   sizes: CatalogSize[]
   inStock: boolean
   createdAt: string
+  updatedAt: string
 }
 
 export type Catalog = { categories: CatalogCategory[]; products: CatalogProduct[] }
@@ -66,11 +69,13 @@ export async function getCatalog(): Promise<Catalog> {
       priceKobo: p.priceKobo,
       compareAtKobo: p.compareAtKobo && p.compareAtKobo > p.priceKobo ? p.compareAtKobo : null,
       featured: p.featured,
+      preLoved: p.condition === 'pre_loved',
       category: p.category ? { name: p.category.name, slug: p.category.slug } : null,
       images: p.images.map((i) => ({ url: i.url, thumbUrl: i.thumbUrl, width: i.width, height: i.height, alt: i.alt })),
       sizes: p.variants.map((v) => ({ id: v.id, label: v.label, stock: Math.max(0, v.stock) })),
       inStock: p.variants.some((v) => v.stock > 0),
       createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
     }))
 
   const counts = new Map<string, number>()

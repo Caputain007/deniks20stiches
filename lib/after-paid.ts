@@ -13,7 +13,7 @@ export function afterPaid(orderId: number, origin: string) {
     const order = await getOrderWithItems({ id: orderId })
     if (!order) return
     const settings = await getSettings()
-    await sendOrderPaidEmails(order, order.items, origin, settings.email)
+    await sendOrderPaidEmails(order, order.items, origin, settings)
   })
 }
 

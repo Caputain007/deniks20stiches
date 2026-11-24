@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useFormAction } from '@/components/use-form-action'
 import { addAdmin, changePassword } from '@/app/actions/admin-auth'
-import { createCategory, saveSettings, saveShippingRates, type ActionState } from '@/app/actions/admin-shop'
+import { createCategory, savePickup, saveSettings, saveShippingRates, type ActionState } from '@/app/actions/admin-shop'
 import { COUNTRIES, NIGERIAN_STATES, countryName } from '@/lib/geo'
 import { REST_OF_WORLD } from '@/lib/shipping-rules'
 import { FormMessage } from './action-button'
@@ -243,6 +243,49 @@ function RateRow({
   )
 }
 
+/* ---------- Pickup ---------- */
+
+export function PickupForm({ enabled, note, address }: { enabled: boolean; note: string; address: string }) {
+  const { state, onSubmit, pending } = useFormAction(savePickup)
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <label className="flex items-center gap-2 font-semibold">
+        <input type="checkbox" name="pickupEnabled" defaultChecked={enabled} className="h-4 w-4 accent-plum" />
+        Let customers collect their order from the shop, free
+      </label>
+      <p className="text-sm text-muted">
+        {address ? (
+          <>
+            Pickup address: <strong className="text-ink">{address}</strong>. Change it in Settings.
+          </>
+        ) : (
+          'Add your shop address in Settings to offer pickup.'
+        )}
+      </p>
+      <div>
+        <label htmlFor="p-note" className="field-label">
+          Pickup instructions
+        </label>
+        <textarea
+          id="p-note"
+          name="pickupNote"
+          defaultValue={note}
+          rows={2}
+          maxLength={300}
+          className="field min-h-0"
+        />
+        <p className="field-hint">Shown at checkout and in the order email.</p>
+      </div>
+      <div className="flex items-center gap-4">
+        <button type="submit" className="btn btn-primary" disabled={pending}>
+          {pending ? 'Saving…' : 'Save pickup'}
+        </button>
+        <FormMessage state={state} />
+      </div>
+    </form>
+  )
+}
+
 /* ---------- Shop settings ---------- */
 
 export function ShopSettingsForm({ values }: { values: Record<string, string> }) {
@@ -276,9 +319,17 @@ export function ShopSettingsForm({ values }: { values: Record<string, string> })
         'Shown in the footer. New-order alerts go here too if order emails are switched on.',
         { type: 'email' },
       )}
+      {text(
+        'address',
+        'Shop address',
+        'Shown in the footer and on the bespoke page, and used for pickup at checkout.',
+        { maxLength: 200, autoComplete: 'street-address' },
+      )}
+      {text('hours', 'Opening hours', 'For example: Mon–Sat, 8:00 am – 6:00 pm', { maxLength: 120 })}
       {text('instagram', 'Instagram handle', undefined, { placeholder: '@deniks20stitches' })}
-      {text('announcement', 'Announcement bar', 'Short message across the top of every page. Leave empty to hide it.', {
-        maxLength: 160,
+      {text('facebook', 'Facebook page', 'Paste the link to your Facebook page.', {
+        placeholder: 'https://facebook.com/…',
+        maxLength: 200,
       })}
       <div>
         <label htmlFor="s-checkoutNote" className="field-label">

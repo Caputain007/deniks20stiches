@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { CheckoutForm } from '@/components/shop/checkout-form'
 import { paymentsConfigured } from '@/lib/paystack'
-import { getSettings, whatsappLink } from '@/lib/settings'
+import { getSettings, mapsLink, pickupEnabled, whatsappLink } from '@/lib/settings'
 import { getShippingRates } from '@/lib/shipping'
 
 export const metadata: Metadata = { title: 'Checkout', robots: { index: false } }
@@ -16,6 +16,11 @@ export default async function CheckoutPage() {
         checkoutNote={settings.checkoutNote}
         whatsapp={whatsappLink(settings.whatsapp, "Hello Deniks20 Stitches, I'd like to place an order.")}
         paymentsReady={paymentsConfigured()}
+        pickup={
+          pickupEnabled(settings)
+            ? { address: settings.address, note: settings.pickupNote, mapsUrl: mapsLink(settings.address) }
+            : null
+        }
       />
     </div>
   )

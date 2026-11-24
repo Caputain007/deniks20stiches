@@ -11,7 +11,7 @@ import { sendOrderShippedEmail } from '@/lib/email'
 import { isCountryCode, NIGERIAN_STATES, REST_OF_WORLD } from '@/lib/geo'
 import { parseNairaToKobo } from '@/lib/money'
 import { getOrigin } from '@/lib/origin'
-import { getSettings, SETTING_FIELDS, SETTINGS_TAG, type SettingKey } from '@/lib/settings'
+import { getSettings, SETTINGS_TAG, SHOP_DETAIL_FIELDS, type SettingKey, type ShopDetailKey } from '@/lib/settings'
 import { SHIPPING_TAG } from '@/lib/shipping'
 import { slugify } from '@/lib/slug'
 
@@ -127,6 +127,9 @@ export async function markShipped(orderId: number, _prev: ActionState, formData:
   const result = await getDb().transaction(async (tx) => {
     const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, orderId)).for('update')
     if (!order) return { error: 'Order not found.' } as const
+    if (order.fulfillment === 'pickup') {
+      return { error: 'This order is collected from the shop. Mark it ready to collect instead.' } as const
+    }
     if (order.status !== 'paid' && order.status !== 'shipped') {
       return { error: 'Only paid orders can be marked as shipped.' } as const
     }
@@ -142,10 +145,42 @@ export async function markShipped(orderId: number, _prev: ActionState, formData:
   if (formData.get('notify') === 'on') {
     const origin = await getOrigin()
     const settings = await getSettings()
-    after(() => sendOrderShippedEmail(result.updated, origin, settings.email))
+    after(() => sendOrderShippedEmail(result.updated, origin, settings))
   }
   refresh()
   return { ok: true, message: result.wasShipped ? 'Tracking details updated.' : 'Marked as shipped.' }
+}
+
+/** Pickup orders: the order is packed and waiting at the shop ("shipped" in the order's status). */
+export async function markReadyForPickup(
+  orderId: number,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAdmin()
+  const result = await getDb().transaction(async (tx) => {
+    const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, orderId)).for('update')
+    if (!order) return { error: 'Order not found.' } as const
+    if (order.fulfillment !== 'pickup') return { error: 'This order is being delivered, not collected.' } as const
+    if (order.status === 'shipped') return { already: true } as const
+    if (order.status !== 'paid') return { error: 'Only paid orders can be made ready to collect.' } as const
+    const [updated] = await tx
+      .update(schema.orders)
+      .set({ status: 'shipped', shippedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.orders.id, orderId))
+      .returning()
+    return { updated } as const
+  })
+  if ('error' in result) return { error: result.error }
+  if ('already' in result) return { ok: true, message: 'Already marked ready to collect.' }
+
+  if (formData.get('notify') === 'on') {
+    const origin = await getOrigin()
+    const settings = await getSettings()
+    after(() => sendOrderShippedEmail(result.updated, origin, settings))
+  }
+  refresh()
+  return { ok: true, message: 'Marked ready to collect.' }
 }
 
 export async function setOrderStatus(
@@ -168,7 +203,7 @@ export async function setOrderStatus(
         .update(schema.orders)
         .set({ status: 'delivered', deliveredAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.orders.id, orderId))
-      return { ok: true, message: 'Marked as delivered.' }
+      return { ok: true, message: order.fulfillment === 'pickup' ? 'Marked as collected.' : 'Marked as delivered.' }
     }
 
     if (status === 'cancelled') {
@@ -209,7 +244,7 @@ export async function setOrderStatus(
         .update(schema.orders)
         .set({ status: order.shippedAt ? 'shipped' : 'paid', deliveredAt: null, updatedAt: new Date() })
         .where(eq(schema.orders.id, orderId))
-      return { ok: true, message: 'Delivery undone.' }
+      return { ok: true, message: order.fulfillment === 'pickup' ? 'Collection undone.' : 'Delivery undone.' }
     }
     return { error: 'That change isn’t possible for this order.' }
   })
@@ -280,22 +315,23 @@ export async function saveShippingRates(rates: unknown): Promise<ActionState> {
 
 /* ---------- Shop settings ---------- */
 
-export async function saveSettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  await requireAdmin()
-  const values = (Object.keys(SETTING_FIELDS) as SettingKey[]).map((key) => ({
-    key,
-    value: String(formData.get(key) ?? '')
-      .trim()
-      .slice(0, key === 'checkoutNote' || key === 'announcement' ? 400 : 120),
-  }))
-  const email = values.find((v) => v.key === 'email')?.value
-  if (email && !z.email().safeParse(email).success) return { error: 'The contact email doesn’t look right.' }
-  const whatsapp = values.find((v) => v.key === 'whatsapp')?.value
-  if (whatsapp && whatsapp.replace(/\D/g, '').length < 8)
-    return { error: 'Enter the WhatsApp number with its country code, e.g. 2349017181181.' }
+const LIMITS: Partial<Record<ShopDetailKey, number>> = { checkoutNote: 400, address: 200, facebook: 200 }
 
-  const db = getDb()
-  await db.transaction(async (tx) => {
+/** "facebook.com/deniks20" or a full link becomes https://facebook.com/deniks20. */
+function facebookUrl(value: string): string | null {
+  if (!value) return ''
+  try {
+    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`)
+    if (!/(^|\.)(facebook|fb)\.com$/i.test(url.hostname)) return null
+    url.protocol = 'https:'
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+async function writeSettings(values: { key: SettingKey; value: string }[]) {
+  await getDb().transaction(async (tx) => {
     for (const v of values) {
       await tx
         .insert(schema.settings)
@@ -304,6 +340,44 @@ export async function saveSettings(_prev: ActionState, formData: FormData): Prom
     }
   })
   updateTag(SETTINGS_TAG)
+}
+
+export async function saveSettings(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin()
+  const values = (Object.keys(SHOP_DETAIL_FIELDS) as ShopDetailKey[]).map((key) => ({
+    key,
+    value: String(formData.get(key) ?? '')
+      .trim()
+      .slice(0, LIMITS[key] ?? 120),
+  }))
+  const get = (key: ShopDetailKey) => values.find((v) => v.key === key)!
+  const email = get('email').value
+  if (email && !z.email().safeParse(email).success) return { error: 'The contact email doesn’t look right.' }
+  const whatsapp = get('whatsapp').value
+  if (whatsapp && whatsapp.replace(/\D/g, '').length < 8)
+    return { error: 'Enter the WhatsApp number with its country code, e.g. 2349017181181.' }
+  const facebook = facebookUrl(get('facebook').value)
+  if (facebook === null) return { error: 'The Facebook page should be a facebook.com link.' }
+  get('facebook').value = facebook
+
+  await writeSettings(values)
   refresh()
   return { ok: true, message: 'Settings saved.' }
+}
+
+export async function savePickup(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin()
+  const enabled = formData.get('pickupEnabled') === 'on'
+  const note = String(formData.get('pickupNote') ?? '')
+    .trim()
+    .slice(0, 300)
+  if (enabled && !(await getSettings()).address.trim()) {
+    return { error: 'Add your shop address in Settings first, so customers know where to collect.' }
+  }
+  await writeSettings([
+    { key: 'pickupEnabled', value: enabled ? '1' : '' },
+    { key: 'pickupNote', value: note },
+  ])
+  refresh()
+  return { ok: true, message: enabled ? 'Pickup is on. Customers can choose it at checkout.' : 'Pickup is off.' }
 }

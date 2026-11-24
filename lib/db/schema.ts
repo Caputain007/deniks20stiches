@@ -24,6 +24,28 @@ export type ProductStatus = (typeof PRODUCT_STATUSES)[number]
 export const ORDER_STATUSES = ['pending', 'paid', 'shipped', 'delivered', 'cancelled'] as const
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
 
+/** Delivered by courier, or collected from the shop (then "shipped" means ready to collect). */
+export const FULFILLMENTS = ['delivery', 'pickup'] as const
+export type Fulfillment = (typeof FULFILLMENTS)[number]
+
+/** Thrift pieces are sold as pre-loved. */
+export const PRODUCT_CONDITIONS = ['new', 'pre_loved'] as const
+export type ProductCondition = (typeof PRODUCT_CONDITIONS)[number]
+
+export const COUPON_KINDS = ['percent', 'amount', 'free_delivery'] as const
+export type CouponKind = (typeof COUPON_KINDS)[number]
+
+/** "bar" runs across the top of every page; "hero" replaces the home page's opening banner. */
+export const BANNER_PLACEMENTS = ['bar', 'hero'] as const
+export type BannerPlacement = (typeof BANNER_PLACEMENTS)[number]
+
+export const MEASUREMENT_PURPOSES = ['bespoke', 'alteration', 'keep'] as const
+export type MeasurementPurpose = (typeof MEASUREMENT_PURPOSES)[number]
+export const MEASUREMENT_STATUSES = ['new', 'contacted', 'done'] as const
+export type MeasurementStatus = (typeof MEASUREMENT_STATUSES)[number]
+export const MEASUREMENT_UNITS = ['in', 'cm'] as const
+export type MeasurementUnit = (typeof MEASUREMENT_UNITS)[number]
+
 /** A product can only be published once it has at least this many photos. */
 export const MIN_PRODUCT_PHOTOS = 4
 
@@ -51,6 +73,7 @@ export const products = pgTable(
     compareAtKobo: kobo('compare_at_kobo'),
     status: text('status', { enum: PRODUCT_STATUSES }).notNull().default('draft'),
     featured: boolean('featured').notNull().default(false),
+    condition: text('condition', { enum: PRODUCT_CONDITIONS }).notNull().default('new'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -110,6 +133,73 @@ export const shippingRates = pgTable(
   (t) => [uniqueIndex('shipping_rates_country_region_idx').on(t.country, t.region)],
 )
 
+/**
+ * Discount codes. A code's uses are its paid orders plus pending orders young
+ * enough to still be paid, counted while the coupon row is locked.
+ */
+export const coupons = pgTable('coupons', {
+  id: serial('id').primaryKey(),
+  /** Stored in capitals; customers can type it in any case. */
+  code: text('code').notNull().unique(),
+  kind: text('kind', { enum: COUPON_KINDS }).notNull(),
+  /** Percent off (1–100) for "percent", kobo off for "amount", unused for "free_delivery". */
+  value: kobo('value').notNull().default(0),
+  minSubtotalKobo: kobo('min_subtotal_kobo').notNull().default(0),
+  /** Null means no limit. */
+  maxUses: integer('max_uses'),
+  oncePerCustomer: boolean('once_per_customer').notNull().default(false),
+  startsAt: timestamp('starts_at', { withTimezone: true }),
+  endsAt: timestamp('ends_at', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  /** Private note for admins, e.g. who the code was given to. */
+  note: text('note').notNull().default(''),
+  createdAt: createdAt(),
+})
+
+export const banners = pgTable('banners', {
+  id: serial('id').primaryKey(),
+  placement: text('placement', { enum: BANNER_PLACEMENTS }).notNull(),
+  /** The bar's message, or the home banner's headline. */
+  title: text('title').notNull().default(''),
+  body: text('body').notNull().default(''),
+  linkLabel: text('link_label').notNull().default(''),
+  linkUrl: text('link_url').notNull().default(''),
+  imageUrl: text('image_url').notNull().default(''),
+  imageWidth: integer('image_width'),
+  imageHeight: integer('image_height'),
+  startsAt: timestamp('starts_at', { withTimezone: true }),
+  endsAt: timestamp('ends_at', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+})
+
+/** Measurements customers send for bespoke tailoring or alterations. */
+export const measurementRequests = pgTable(
+  'measurement_requests',
+  {
+    id: serial('id').primaryKey(),
+    reference: text('reference').notNull().unique(),
+    name: text('name').notNull(),
+    phone: text('phone').notNull(),
+    email: text('email').notNull().default(''),
+    purpose: text('purpose', { enum: MEASUREMENT_PURPOSES }).notNull(),
+    unit: text('unit', { enum: MEASUREMENT_UNITS }).notNull(),
+    /** Measurement key → number, in `unit`. */
+    values: jsonb('values').$type<Record<string, number>>().notNull(),
+    notes: text('notes').notNull().default(''),
+    orderNumber: text('order_number').notNull().default(''),
+    status: text('status', { enum: MEASUREMENT_STATUSES }).notNull().default('new'),
+    /** Hashed sender address, only for limiting how often one sender can submit. */
+    ipHash: text('ip_hash').notNull().default(''),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('measurement_requests_status_idx').on(t.status, t.createdAt),
+    index('measurement_requests_ip_idx').on(t.ipHash, t.createdAt),
+  ],
+)
+
 export const orders = pgTable(
   'orders',
   {
@@ -118,6 +208,7 @@ export const orders = pgTable(
     /** Secret used in the customer's order link. */
     accessKey: text('access_key').notNull(),
     status: text('status', { enum: ORDER_STATUSES }).notNull().default('pending'),
+    fulfillment: text('fulfillment', { enum: FULFILLMENTS }).notNull().default('delivery'),
     email: text('email').notNull(),
     phone: text('phone').notNull(),
     customerName: text('customer_name').notNull(),
@@ -131,6 +222,10 @@ export const orders = pgTable(
     deliveryNote: text('delivery_note').notNull().default(''),
     subtotalKobo: kobo('subtotal_kobo').notNull(),
     shippingKobo: kobo('shipping_kobo').notNull(),
+    /** Coupon saving; a free-delivery coupon saves the delivery fee. total = subtotal + shipping - discount. */
+    discountKobo: kobo('discount_kobo').notNull().default(0),
+    couponId: integer('coupon_id').references(() => coupons.id, { onDelete: 'set null' }),
+    couponCode: text('coupon_code').notNull().default(''),
     totalKobo: kobo('total_kobo').notNull(),
     currency: varchar('currency', { length: 3 }).notNull().default('NGN'),
     shippingEta: text('shipping_eta').notNull().default(''),
@@ -150,7 +245,11 @@ export const orders = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('orders_status_created_idx').on(t.status, t.createdAt), index('orders_email_idx').on(t.email)],
+  (t) => [
+    index('orders_status_created_idx').on(t.status, t.createdAt),
+    index('orders_email_idx').on(t.email),
+    index('orders_coupon_idx').on(t.couponId),
+  ],
 )
 
 export const orderItems = pgTable(
@@ -275,9 +374,10 @@ export const productVariantsRelations = relations(productVariants, ({ one }) => 
   product: one(products, { fields: [productVariants.productId], references: [products.id] }),
 }))
 
-export const ordersRelations = relations(orders, ({ many }) => ({
+export const ordersRelations = relations(orders, ({ one, many }) => ({
   items: many(orderItems),
   issues: many(paymentIssues),
+  coupon: one(coupons, { fields: [orders.couponId], references: [coupons.id] }),
 }))
 
 export const paymentIssuesRelations = relations(paymentIssues, ({ one }) => ({

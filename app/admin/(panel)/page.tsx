@@ -9,7 +9,7 @@ import { storageMode } from '@/lib/storage'
 
 export default async function DashboardPage() {
   const admin = await requireAdmin()
-  const [{ toShip, awaiting, live, drafts, rates, paidWeek, recent }, flagged] = await Promise.all([
+  const [{ toShip, awaiting, live, drafts, rates, paidWeek, recent, newMeasurements }, flagged] = await Promise.all([
     getDashboardStats(),
     ordersWithOpenIssues(),
   ])
@@ -60,6 +60,19 @@ export default async function DashboardPage() {
               {flagged.length === 1 ? '1 order has' : `${flagged.length} orders have`} a payment that needs attention
             </Link>{' '}
             <span className="text-ink">(for example a double payment to refund).</span>
+          </Notice>
+        </div>
+      )}
+
+      {newMeasurements > 0 && (
+        <div className="mb-6">
+          <Notice>
+            <Link href="/admin/measurements" className="font-semibold">
+              {newMeasurements === 1
+                ? '1 customer has sent measurements'
+                : `${newMeasurements} customers have sent measurements`}
+            </Link>{' '}
+            <span className="text-muted">waiting for you to get in touch.</span>
           </Notice>
         </div>
       )}

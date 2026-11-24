@@ -2,7 +2,7 @@ import { handleUpload, type HandleUploadBody } from '@vercel/blob/client'
 import { NextResponse } from 'next/server'
 import { getAdmin } from '@/lib/auth'
 
-// Gives the admin's browser a short-lived token to upload a product photo
+// Gives the admin's browser a short-lived token to upload a product or banner photo
 // straight to Vercel Blob (so large phone photos never pass through this server).
 export async function POST(request: Request) {
   let body: HandleUploadBody
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       request,
       onBeforeGenerateToken: async (pathname) => {
         if (!(await getAdmin())) throw new Error('Sign in to upload photos.')
-        if (!/^products\/\d+\/[\w-]+\.(webp|jpg)$/.test(pathname)) throw new Error('Unexpected file name.')
+        if (!/^(products\/\d+|banners)\/[\w-]+\.(webp|jpg)$/.test(pathname)) throw new Error('Unexpected file name.')
         return {
           allowedContentTypes: ['image/webp', 'image/jpeg'],
           maximumSizeInBytes: 10 * 1024 * 1024,

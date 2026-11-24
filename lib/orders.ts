@@ -1,22 +1,16 @@
 import 'server-only'
 import { randomBytes } from 'node:crypto'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { isUniqueViolation, randomCode } from './codes'
+import { applyCoupon, CouponError, orderCouponProblem, type AppliedCoupon } from './coupons'
 import { getDb, schema } from './db'
-import type { PaymentIssueKind } from './db/schema'
+import type { Fulfillment, PaymentIssueKind } from './db/schema'
 import { formatNaira } from './money'
+import { PENDING_ORDER_DAYS } from './order-rules'
 import { initializeTransaction, verifyTransaction, type VerifiedTransaction } from './paystack'
+import { getSettings, pickupEnabled } from './settings'
 import { readShippingRates } from './shipping'
 import { findRate } from './shipping-rules'
-
-// No 0/O or 1/I, so numbers are easy to read out on the phone.
-const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
-
-function randomCode(length: number): string {
-  const bytes = randomBytes(length)
-  let out = ''
-  for (let i = 0; i < length; i++) out += ALPHABET[bytes[i] % ALPHABET.length] // 256 is a multiple of 32: no bias
-  return out
-}
 
 export type Order = typeof schema.orders.$inferSelect
 export type OrderItem = typeof schema.orderItems.$inferSelect
@@ -24,6 +18,7 @@ export type OrderItem = typeof schema.orderItems.$inferSelect
 export type BagLine = { variantId: number; quantity: number }
 
 export type CheckoutInput = {
+  fulfillment: Fulfillment
   email: string
   phone: string
   name: string
@@ -34,15 +29,18 @@ export type CheckoutInput = {
   address2: string
   postcode: string
   note: string
+  couponCode: string
   lines: BagLine[]
 }
 
-/** A problem the customer can fix (shown on the checkout form). */
-export class CheckoutError extends Error {}
-
-function isUniqueViolation(error: unknown): boolean {
-  const cause = (error as { cause?: { code?: string } })?.cause
-  return (error as { code?: string })?.code === '23505' || cause?.code === '23505'
+/** A problem the customer can fix (shown on the checkout form, next to `field` if given). */
+export class CheckoutError extends Error {
+  constructor(
+    message: string,
+    readonly field?: string,
+  ) {
+    super(message)
+  }
 }
 
 /** Re-prices the bag from the database, checks stock and delivery, and saves a pending order. */
@@ -99,9 +97,20 @@ export async function createOrder(input: CheckoutInput): Promise<Order> {
   }
   if (problems.length) throw new CheckoutError(problems.join(' '))
 
-  const rate = findRate(await readShippingRates(), input.country, input.country === 'NG' ? input.region : '')
-  if (!rate) {
-    throw new CheckoutError("We don't deliver to this address yet. Message us on WhatsApp and we'll arrange it.")
+  const pickup = input.fulfillment === 'pickup'
+  let shippingKobo = 0
+  let shippingEta = ''
+  if (pickup) {
+    if (!pickupEnabled(await getSettings())) {
+      throw new CheckoutError('Pickup at the shop isn’t available right now. Choose delivery instead.')
+    }
+  } else {
+    const rate = findRate(await readShippingRates(), input.country, input.country === 'NG' ? input.region : '')
+    if (!rate) {
+      throw new CheckoutError("We don't deliver to this address yet. Message us on WhatsApp and we'll arrange it.")
+    }
+    shippingKobo = rate.feeKobo
+    shippingEta = rate.eta
   }
 
   const subtotalKobo = items.reduce((sum, item) => sum + item.unitPriceKobo * item.quantity, 0)
@@ -109,31 +118,47 @@ export async function createOrder(input: CheckoutInput): Promise<Order> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await db.transaction(async (tx) => {
+        // The coupon row stays locked until this order is saved, so its last use can't be taken twice.
+        let applied: AppliedCoupon | null = null
+        if (input.couponCode) {
+          applied = await applyCoupon(tx, input.couponCode, {
+            subtotalKobo,
+            shippingKobo,
+            email: input.email,
+            lock: true,
+          })
+        }
+        const discountKobo = applied?.discountKobo ?? 0
         const [order] = await tx
           .insert(schema.orders)
           .values({
             number: `DS-${randomCode(6)}`,
             accessKey: randomBytes(18).toString('base64url'),
+            fulfillment: input.fulfillment,
             email: input.email,
             phone: input.phone,
             customerName: input.name,
-            shipCountry: input.country,
-            shipRegion: input.region,
-            shipCity: input.city,
-            shipAddress1: input.address1,
-            shipAddress2: input.address2,
-            shipPostcode: input.postcode,
+            shipCountry: pickup ? 'NG' : input.country,
+            shipRegion: pickup ? '' : input.region,
+            shipCity: pickup ? '' : input.city,
+            shipAddress1: pickup ? '' : input.address1,
+            shipAddress2: pickup ? '' : input.address2,
+            shipPostcode: pickup ? '' : input.postcode,
             deliveryNote: input.note,
             subtotalKobo,
-            shippingKobo: rate.feeKobo,
-            totalKobo: subtotalKobo + rate.feeKobo,
-            shippingEta: rate.eta,
+            shippingKobo,
+            discountKobo,
+            couponId: applied?.coupon.id ?? null,
+            couponCode: applied?.coupon.code ?? '',
+            totalKobo: subtotalKobo + shippingKobo - discountKobo,
+            shippingEta,
           })
           .returning()
         await tx.insert(schema.orderItems).values(items.map((item) => ({ ...item, orderId: order.id })))
         return order
       })
     } catch (error) {
+      if (error instanceof CouponError) throw new CheckoutError(error.message, 'couponCode')
       if (attempt < 4 && isUniqueViolation(error)) continue // order number clash: try another
       throw error
     }
@@ -278,12 +303,11 @@ export async function finalizePayment(
   })
 }
 
-const PENDING_ORDER_DAYS = 3
-
 /**
  * Before a pending order is paid later (from its order page), check it still
- * matches the shop: not too old, items available at the same price, and the
- * same delivery fee. Returns what changed, or null if it can still be paid.
+ * matches the shop: not too old, items available at the same price, the same
+ * delivery fee (or pickup still offered) and the same coupon saving. Returns
+ * what changed, or null if it can still be paid.
  */
 export async function pendingOrderProblem(order: Order & { items: OrderItem[] }): Promise<string | null> {
   if (Date.now() - order.createdAt.getTime() > PENDING_ORDER_DAYS * 86_400_000) {
@@ -304,13 +328,17 @@ export async function pendingOrderProblem(order: Order & { items: OrderItem[] })
     if (row.variant.stock < item.quantity)
       return `${item.productName} (${item.variantLabel}) no longer has enough stock.`
   }
-  const rate = findRate(
-    await readShippingRates(),
-    order.shipCountry,
-    order.shipCountry === 'NG' ? order.shipRegion : '',
-  )
-  if (!rate || rate.feeKobo !== order.shippingKobo) return 'The delivery fee for this address has changed.'
-  return null
+  if (order.fulfillment === 'pickup') {
+    if (!pickupEnabled(await getSettings())) return 'Pickup at the shop isn’t available any more.'
+  } else {
+    const rate = findRate(
+      await readShippingRates(),
+      order.shipCountry,
+      order.shipCountry === 'NG' ? order.shipRegion : '',
+    )
+    if (!rate || rate.feeKobo !== order.shippingKobo) return 'The delivery fee for this address has changed.'
+  }
+  return orderCouponProblem(order)
 }
 
 /** Cancels a pending order that can no longer be paid as it stands. */

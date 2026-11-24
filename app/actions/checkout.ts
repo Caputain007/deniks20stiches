@@ -4,7 +4,10 @@ import { timingSafeEqual } from 'node:crypto'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
+import { describeCoupon, type CouponTerms } from '@/lib/coupon-rules'
+import { applyCoupon, CouponError, termsOf } from '@/lib/coupons'
 import { getDb, schema } from '@/lib/db'
+import { FULFILLMENTS } from '@/lib/db/schema'
 import { isCountryCode, NIGERIAN_STATES } from '@/lib/geo'
 import {
   cancelPendingOrder,
@@ -17,6 +20,9 @@ import {
 } from '@/lib/orders'
 import { getOrigin } from '@/lib/origin'
 import { PaymentsNotConfiguredError, paymentsConfigured } from '@/lib/paystack'
+import { getSettings, pickupEnabled } from '@/lib/settings'
+import { readShippingRates } from '@/lib/shipping'
+import { findRate } from '@/lib/shipping-rules'
 
 const lineSchema = z.object({
   variantId: z.number().int().positive(),
@@ -89,25 +95,30 @@ const trimmed = (max: number) => z.string().trim().max(max)
 
 const checkoutSchema = z
   .object({
+    fulfillment: z.enum(FULFILLMENTS).default('delivery'),
     email: z.email('Enter a valid email address.').max(254),
     phone: z
       .string()
       .trim()
       .regex(/^\+?[\d\s()-]{7,20}$/, 'Enter a phone number we can call, e.g. 0803 123 4567.'),
     name: trimmed(100).min(2, 'Enter your full name.'),
-    country: z.string().refine(isCountryCode, 'Choose a country.'),
+    country: z.string(),
     region: trimmed(100),
-    city: trimmed(100).min(2, 'Enter your town or city.'),
-    address1: trimmed(200).min(3, 'Enter your street address.'),
+    city: trimmed(100),
+    address1: trimmed(200),
     address2: trimmed(200),
     postcode: trimmed(20),
     note: trimmed(500),
+    couponCode: trimmed(40).default(''),
     lines: linesSchema.min(1, 'Your bag is empty.'),
   })
   .superRefine((data, ctx) => {
-    if (data.country === 'NG' && !NIGERIAN_STATES.includes(data.region)) {
-      ctx.addIssue({ code: 'custom', path: ['region'], message: 'Choose your state.' })
-    }
+    if (data.fulfillment === 'pickup') return // collected from the shop: no address needed
+    const issue = (path: string, message: string) => ctx.addIssue({ code: 'custom', path: [path], message })
+    if (!isCountryCode(data.country)) issue('country', 'Choose a country.')
+    if (data.country === 'NG' && !NIGERIAN_STATES.includes(data.region)) issue('region', 'Choose your state.')
+    if (data.city.length < 2) issue('city', 'Enter your town or city.')
+    if (data.address1.length < 3) issue('address1', 'Enter your street address.')
   })
 
 export type PlaceOrderResult =
@@ -132,7 +143,13 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   try {
     order = await createOrder({ ...parsed.data, email: parsed.data.email.toLowerCase() })
   } catch (error) {
-    if (error instanceof CheckoutError) return { ok: false, error: error.message }
+    if (error instanceof CheckoutError) {
+      return {
+        ok: false,
+        error: error.message,
+        ...(error.field ? { fieldErrors: { [error.field]: error.message } } : {}),
+      }
+    }
     console.error('createOrder failed', error)
     return { ok: false, error: 'We couldn’t save your order. Please try again in a moment.' }
   }
@@ -147,6 +164,56 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       error: `Your order ${order.number} is saved, but we couldn’t open the payment page. Try again from your order page.`,
       orderLink: `/order/${order.number}?key=${order.accessKey}`,
     }
+  }
+}
+
+export type CouponCheck =
+  { ok: true; terms: CouponTerms; label: string; discountKobo: number } | { ok: false; error: string }
+
+const couponCheckSchema = z.object({
+  code: trimmed(40),
+  lines: linesSchema,
+  fulfillment: z.enum(FULFILLMENTS),
+  country: z.string().max(2),
+  region: trimmed(100),
+  email: z.string().trim().max(254),
+})
+
+/** "Apply" on the checkout's coupon field. The order is checked again when it's placed. */
+export async function checkCoupon(input: unknown): Promise<CouponCheck> {
+  const parsed = couponCheckSchema.safeParse(input)
+  if (!parsed.success) return { ok: false, error: 'Enter a coupon code.' }
+  const { code, lines, fulfillment, country, region, email } = parsed.data
+  if (!code) return { ok: false, error: 'Enter a coupon code.' }
+
+  const items = await getBagItems(lines)
+  const subtotalKobo = lines.reduce((sum, line) => {
+    const item = items.find((i) => i.variantId === line.variantId)
+    return sum + (item?.available ? item.priceKobo * line.quantity : 0)
+  }, 0)
+  // Null while the delivery fee isn't known yet (no state chosen); pickup has no fee.
+  let shippingKobo: number | null = 0
+  if (fulfillment === 'delivery') {
+    const rate = isCountryCode(country)
+      ? findRate(await readShippingRates(), country, country === 'NG' ? region : '')
+      : null
+    shippingKobo = rate?.feeKobo ?? null
+  } else if (!pickupEnabled(await getSettings())) {
+    return { ok: false, error: 'Pickup at the shop isn’t available right now.' }
+  }
+
+  try {
+    const { coupon, discountKobo } = await applyCoupon(getDb(), code, {
+      subtotalKobo,
+      shippingKobo,
+      email: z.email().safeParse(email).success ? email : undefined,
+    })
+    const terms = termsOf(coupon)
+    return { ok: true, terms, label: describeCoupon(terms), discountKobo }
+  } catch (error) {
+    if (error instanceof CouponError) return { ok: false, error: error.message }
+    console.error('checkCoupon failed', error)
+    return { ok: false, error: 'We couldn’t check that code. Please try again.' }
   }
 }
 

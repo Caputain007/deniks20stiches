@@ -8,7 +8,7 @@ import { ClearBagAfterPayment, PayNowButton } from '@/components/shop/order-acti
 import { countryName } from '@/lib/geo'
 import { formatNaira } from '@/lib/money'
 import { getOrderWithItems } from '@/lib/orders'
-import { getSettings, whatsappLink } from '@/lib/settings'
+import { getSettings, mapsLink, whatsappLink } from '@/lib/settings'
 
 export const metadata: Metadata = { title: 'Your order', robots: { index: false } }
 
@@ -28,18 +28,26 @@ function sameKey(given: string, actual: string) {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-const STEPS = [
-  { status: 'paid', label: 'Paid' },
-  { status: 'shipped', label: 'Shipped' },
-  { status: 'delivered', label: 'Delivered' },
-] as const
+const STEPS = {
+  delivery: ['Paid', 'Shipped', 'Delivered'],
+  pickup: ['Paid', 'Ready to collect', 'Collected'],
+} as const
 
 const HEADLINES = {
-  pending: 'Waiting for payment',
-  paid: 'Thank you, your order is confirmed',
-  shipped: 'Your order is on its way',
-  delivered: 'Your order has been delivered',
-  cancelled: 'This order was cancelled',
+  delivery: {
+    pending: 'Waiting for payment',
+    paid: 'Thank you, your order is confirmed',
+    shipped: 'Your order is on its way',
+    delivered: 'Your order has been delivered',
+    cancelled: 'This order was cancelled',
+  },
+  pickup: {
+    pending: 'Waiting for payment',
+    paid: 'Thank you, your order is confirmed',
+    shipped: 'Your order is ready to collect',
+    delivered: 'You’ve collected your order',
+    cancelled: 'This order was cancelled',
+  },
 } as const
 
 async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>) {
@@ -67,6 +75,7 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
     settings.whatsapp,
     `Hello Deniks20 Stitches, I have a question about order ${order.number}.`,
   )
+  const maps = mapsLink(settings.address)
   const reached = order.status === 'delivered' ? 3 : order.status === 'shipped' ? 2 : order.status === 'paid' ? 1 : 0
   const justPaid = query.paid === '1' && order.status !== 'pending' && order.status !== 'cancelled'
 
@@ -74,7 +83,7 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
     <div>
       {justPaid && <ClearBagAfterPayment />}
       <p className="text-muted">Order {order.number}</p>
-      <h1 className="mt-1 text-4xl sm:text-5xl">{HEADLINES[order.status]}</h1>
+      <h1 className="mt-1 text-4xl sm:text-5xl">{HEADLINES[order.fulfillment][order.status]}</h1>
 
       {order.status === 'pending' && (
         <div className="mt-6 max-w-xl space-y-4">
@@ -92,11 +101,11 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
 
       {order.status !== 'pending' && order.status !== 'cancelled' && (
         <ol className="mt-8 grid max-w-xl grid-cols-3 gap-2" aria-label="Order progress">
-          {STEPS.map((step, i) => (
-            <li key={step.status} className="text-sm">
+          {STEPS[order.fulfillment].map((label, i) => (
+            <li key={label} className="text-sm">
               <span className={`block h-1.5 ${i < reached ? 'bg-plum' : 'bg-line'}`} />
               <span className={`mt-2 block ${i < reached ? 'font-semibold text-plum' : 'text-muted'}`}>
-                {step.label}
+                {label}
                 {i < reached && <span className="sr-only"> (done)</span>}
               </span>
             </li>
@@ -104,20 +113,35 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
         </ol>
       )}
 
-      {(order.status === 'shipped' || order.status === 'delivered') && (order.courier || order.trackingNumber) && (
+      {order.fulfillment === 'pickup' && order.status === 'shipped' && settings.address && (
         <div className="mt-8 max-w-xl border border-dashed border-plum bg-white px-5 py-4">
-          <p className="font-semibold">Tracking</p>
-          <p className="mt-1">
-            {order.courier || 'Courier'}
-            {order.trackingNumber && `: ${order.trackingNumber}`}
-          </p>
-          {order.trackingUrl && (
-            <a href={order.trackingUrl} className="mt-2 inline-block font-semibold text-plum" rel="noopener noreferrer">
-              Track the delivery
-            </a>
-          )}
+          <p className="font-semibold">Collect from</p>
+          <p className="mt-1">{settings.address}</p>
+          {settings.hours && <p className="mt-1 text-sm text-muted">Open {settings.hours}</p>}
+          <p className="mt-1 text-sm text-muted">Bring your order number, {order.number}.</p>
         </div>
       )}
+
+      {order.fulfillment === 'delivery' &&
+        (order.status === 'shipped' || order.status === 'delivered') &&
+        (order.courier || order.trackingNumber) && (
+          <div className="mt-8 max-w-xl border border-dashed border-plum bg-white px-5 py-4">
+            <p className="font-semibold">Tracking</p>
+            <p className="mt-1">
+              {order.courier || 'Courier'}
+              {order.trackingNumber && `: ${order.trackingNumber}`}
+            </p>
+            {order.trackingUrl && (
+              <a
+                href={order.trackingUrl}
+                className="mt-2 inline-block font-semibold text-plum"
+                rel="noopener noreferrer"
+              >
+                Track the delivery
+              </a>
+            )}
+          </div>
+        )}
 
       <div className="mt-12 grid gap-10 lg:grid-cols-[1fr_22rem]">
         <section aria-labelledby="items-title">
@@ -146,9 +170,15 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
               <dd>{formatNaira(order.subtotalKobo)}</dd>
             </div>
             <div className="flex justify-between">
-              <dt>Delivery</dt>
-              <dd>{formatNaira(order.shippingKobo)}</dd>
+              <dt>{order.fulfillment === 'pickup' ? 'Pickup' : 'Delivery'}</dt>
+              <dd>{order.fulfillment === 'pickup' ? 'Free' : formatNaira(order.shippingKobo)}</dd>
             </div>
+            {order.discountKobo > 0 && (
+              <div className="flex justify-between text-leaf">
+                <dt>Coupon {order.couponCode}</dt>
+                <dd>−{formatNaira(order.discountKobo)}</dd>
+              </div>
+            )}
             <div className="flex justify-between border-t border-line pt-2 text-lg font-bold">
               <dt>Total</dt>
               <dd>{formatNaira(order.totalKobo)}</dd>
@@ -157,27 +187,47 @@ async function OrderView({ params, searchParams }: PageProps<'/order/[number]'>)
         </section>
 
         <aside className="space-y-6 self-start bg-white p-6 ring-1 ring-line">
-          <div>
-            <h2 className="font-sans text-sm font-bold">Delivering to</h2>
-            <address className="mt-2 not-italic leading-relaxed">
-              {order.customerName}
-              <br />
-              {order.shipAddress1}
-              {order.shipAddress2 && (
-                <>
-                  <br />
-                  {order.shipAddress2}
-                </>
+          {order.fulfillment === 'pickup' ? (
+            <div>
+              <h2 className="font-sans text-sm font-bold">Collecting from</h2>
+              <p className="mt-2 leading-relaxed">{settings.address || 'Our shop'}</p>
+              {settings.pickupNote && order.status === 'paid' && (
+                <p className="mt-2 text-sm text-muted">{settings.pickupNote}</p>
               )}
-              <br />
-              {[order.shipCity, order.shipRegion, order.shipPostcode].filter(Boolean).join(', ')}
-              <br />
-              {countryName(order.shipCountry)}
-            </address>
-            {order.shippingEta && order.status === 'paid' && (
-              <p className="mt-2 text-sm text-muted">Usually arrives in {order.shippingEta} once shipped.</p>
-            )}
-          </div>
+              {maps && (
+                <a
+                  href={maps}
+                  className="mt-2 inline-block text-sm font-semibold text-plum"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open in Google Maps
+                </a>
+              )}
+            </div>
+          ) : (
+            <div>
+              <h2 className="font-sans text-sm font-bold">Delivering to</h2>
+              <address className="mt-2 not-italic leading-relaxed">
+                {order.customerName}
+                <br />
+                {order.shipAddress1}
+                {order.shipAddress2 && (
+                  <>
+                    <br />
+                    {order.shipAddress2}
+                  </>
+                )}
+                <br />
+                {[order.shipCity, order.shipRegion, order.shipPostcode].filter(Boolean).join(', ')}
+                <br />
+                {countryName(order.shipCountry)}
+              </address>
+              {order.shippingEta && order.status === 'paid' && (
+                <p className="mt-2 text-sm text-muted">Usually arrives in {order.shippingEta} once shipped.</p>
+              )}
+            </div>
+          )}
           <div>
             <h2 className="font-sans text-sm font-bold">Contact</h2>
             <p className="mt-2 break-words">

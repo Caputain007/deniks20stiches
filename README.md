@@ -2,8 +2,9 @@
 
 The Deniks20 Stitches shop: Malaysian hijabs, modest ready-to-wear, abayas and accessories, with online payment and delivery across Nigeria and abroad.
 
-- **Shop**: catalogue by category, product pages with at least 4 photos, sizes with live stock, a bag, checkout with a Nigerian state picker or any country, the delivery fee shown before paying, payment through Paystack, an order page and order tracking.
-- **Admin** at `/admin`: add products and photos, set prices, sizes and stock, then publish. Also: categories, orders (ship with tracking, mark delivered, cancel and restock), delivery fees, shop details, admins and passwords.
+- **Shop**: a tab for every category, plus Sale, Bespoke and Measurements. Product pages with at least 4 photos, sizes with live stock, a bag, and checkout with delivery (Nigerian state picker or any country, fee shown before paying) or free pickup from the shop in Lokoja. Coupon codes, payment through Paystack, an order page and order tracking.
+- **Measurements**: a measuring guide with a figure that shows where the tape goes, a size finder for the letter sizes, and a step-by-step form for sending measurements for bespoke tailoring or alterations.
+- **Admin** at `/admin`: add products and photos, set prices (and a "was" price for the Sale tab), sizes and stock, mark thrift pieces as pre-loved, then publish. Also: orders (ship with tracking or mark ready to collect, mark delivered, cancel and restock), measurements customers sent, banners (a bar across the top or the home page banner, with start and end dates), coupons, the size chart, the WhatsApp catalogue list and Meta feed, delivery fees and pickup, shop details, admins and passwords.
 
 Built with Next.js 16 on Vercel, Neon Postgres (through Drizzle ORM), Vercel Blob for photos and Paystack for payments. Order emails through Resend are optional.
 
@@ -30,7 +31,19 @@ Built with Next.js 16 on Vercel, Neon Postgres (through Drizzle ORM), Vercel Blo
 - An order is only marked as paid after the server confirms the payment with Paystack's API. Both the return redirect and the webhook do this check, and running it twice is harmless. Stock goes down when the order is paid.
 - Anything that needs a person (a customer who paid twice, a payment that arrived after a cancel, or an amount that doesn't match) shows as **Payment needs attention** on the order and the dashboard, and is emailed to the shop if emails are on.
 - If two people buy the last piece at the same moment, the second order is flagged so you can refund or restock. Cancelling a paid order puts back exactly what it took from stock. Refund the money from the Paystack dashboard.
-- An unpaid order can be paid later from its order page for 3 days, as long as the prices, stock and delivery fee haven't changed.
+- An unpaid order can be paid later from its order page for 3 days, as long as the prices, stock, delivery fee and coupon haven't changed.
+
+## Coupons and pickup
+
+- Coupons take a percentage or an amount off the items, or take off the delivery fee. They can have a minimum order, a total number of uses, one use per customer (by email) and start and end dates.
+- Codes are checked again on the server when the order is placed, with the coupon locked, so the last use of a code can't be taken twice. An unpaid order holds its use for 3 days.
+- Pickup orders pay no delivery fee. In admin they're marked **ready to collect** (the customer can be emailed), then **collected**. Turn pickup on or off, and set the instructions, under **Delivery**. The address comes from **Settings**.
+
+## WhatsApp catalogue
+
+- Product links shared in WhatsApp show the photo, name and price.
+- **Admin → WhatsApp** lists every live product with buttons to copy its name, price, description and link into the WhatsApp Business app's catalogue, which only takes items by hand.
+- `/feeds/meta-catalog.csv` is a product feed in Meta's catalogue format. Add it in Meta Commerce Manager as a scheduled data feed, and Facebook and Instagram catalogues (and a WhatsApp number managed in WhatsApp Manager) pick up new products and price changes on their own.
 
 ## Photos
 

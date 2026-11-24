@@ -22,6 +22,20 @@
       "when": 1795554078597,
       "tag": "0002_payment_safety",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795560871015,
+      "tag": "0003_shop_tools",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795560871696,
+      "tag": "0004_shop_tools_defaults",
+      "breakpoints": true
     }
   ]
 }

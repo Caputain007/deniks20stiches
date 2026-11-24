@@ -70,6 +70,44 @@ export function ShipForm({
   )
 }
 
+export function PickupReadyForm({
+  action,
+  canEmail,
+  readySince,
+}: {
+  action: FormAction
+  canEmail: boolean
+  /** When the order was marked ready, or null while it's still being prepared. */
+  readySince: string | null
+}) {
+  const { state, onSubmit, pending } = useFormAction(action)
+  if (readySince) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm">Waiting at the shop since {readySince}.</p>
+        <FormMessage state={state} />
+      </div>
+    )
+  }
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <p className="text-sm text-muted">When the order is packed and waiting at the shop, let the customer know.</p>
+      {canEmail && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="notify" defaultChecked className="h-4 w-4 accent-plum" />
+          Email the customer that it’s ready to collect
+        </label>
+      )}
+      <div className="flex flex-wrap items-center gap-4">
+        <button type="submit" className="btn btn-primary" disabled={pending}>
+          {pending ? 'Saving…' : 'Mark ready to collect'}
+        </button>
+        <FormMessage state={state} />
+      </div>
+    </form>
+  )
+}
+
 export function NotesForm({ action, defaultValue }: { action: FormAction; defaultValue: string }) {
   const { state, onSubmit, pending } = useFormAction(action)
   return (
@@ -116,10 +154,10 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
   )
 }
 
-export function PrintButton() {
+export function PrintButton({ label = 'Print packing slip' }: { label?: string }) {
   return (
     <button type="button" className="btn btn-quiet no-print" onClick={() => window.print()}>
-      Print packing slip
+      {label}
     </button>
   )
 }

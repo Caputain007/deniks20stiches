@@ -36,9 +36,26 @@ export function SortLinks({ basePath, current }: { basePath: string; current: st
   )
 }
 
-export function Listing({ products, emptyText }: { products: CatalogProduct[]; emptyText: string }) {
+export function Listing({
+  products,
+  emptyText,
+  emptyAction,
+}: {
+  products: CatalogProduct[]
+  emptyText: string
+  emptyAction?: { href: string; label: string } | null
+}) {
   if (products.length === 0) {
-    return <p className="border border-dashed border-line px-6 py-14 text-center text-muted">{emptyText}</p>
+    return (
+      <div className="border border-dashed border-line px-6 py-14 text-center">
+        <p className="text-muted">{emptyText}</p>
+        {emptyAction && (
+          <a href={emptyAction.href} className="btn btn-secondary mt-6">
+            {emptyAction.label}
+          </a>
+        )}
+      </div>
+    )
   }
   return <ProductGrid products={products} />
 }

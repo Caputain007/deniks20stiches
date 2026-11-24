@@ -18,7 +18,6 @@ a:focus-visible { outline: 2px solid var(--plum); outline-offset: 5px; }
 .header { border-bottom: 1px solid var(--line); }
 .brand { gap: .7rem; font-family: Georgia, serif; letter-spacing: .11em; text-decoration: none; }
 .brand small { display: block; margin-top: .2rem; font: .6rem system-ui, sans-serif; letter-spacing: .25em; }
-.brand-tagline { display: block; margin-top: .35rem; color: var(--plum); font-size: clamp(1.5rem, 3vw, 2.5rem); line-height: 1.1; letter-spacing: -.02em; }
 nav { flex-wrap: wrap; gap: .65rem clamp(.85rem, 3vw, 2rem); font-size: .875rem; }
 nav a { text-decoration: none; }
 nav a:hover { text-decoration: underline; }

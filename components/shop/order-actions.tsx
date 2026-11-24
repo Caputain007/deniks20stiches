@@ -6,7 +6,7 @@ import { useBag } from './bag-store'
 
 export function PayNowButton({ number, accessKey, label }: { number: string; accessKey: string; label: string }) {
   const [pending, startTransition] = useTransition()
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; link?: string } | null>(null)
   return (
     <div>
       <button
@@ -17,13 +17,22 @@ export function PayNowButton({ number, accessKey, label }: { number: string; acc
           startTransition(async () => {
             const result = await payForOrder(number, accessKey)
             if (result.ok) window.location.assign(result.redirectTo)
-            else setError(result.error)
+            else setError({ message: result.error, link: result.orderLink })
           })
         }
       >
         {pending ? 'Opening Paystack…' : label}
       </button>
-      {error && <p className="mt-2 text-sm font-semibold text-rose">{error}</p>}
+      {error && (
+        <p className="mt-2 text-sm font-semibold text-rose">
+          {error.message}{' '}
+          {error.link && (
+            <a href={error.link} className="text-plum">
+              Go to your bag
+            </a>
+          )}
+        </p>
+      )}
     </div>
   )
 }

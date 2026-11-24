@@ -1,5 +1,5 @@
 import 'server-only'
-import { and, asc, count, desc, eq, gt, gte, lt, ne } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, gte, isNull, lt, ne } from 'drizzle-orm'
 import { getDb, schema } from './db'
 import { MIN_PRODUCT_PHOTOS } from './db/schema'
 
@@ -65,4 +65,13 @@ export async function getDashboardStats() {
     paidWeek: paidWeek.n,
     recent,
   }
+}
+
+/** IDs of orders with a payment that still needs an admin's attention. */
+export async function ordersWithOpenIssues(): Promise<number[]> {
+  const rows = await getDb()
+    .selectDistinct({ orderId: schema.paymentIssues.orderId })
+    .from(schema.paymentIssues)
+    .where(isNull(schema.paymentIssues.resolvedAt))
+  return rows.map((r) => r.orderId)
 }

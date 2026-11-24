@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 
 type Result = { ok?: boolean; message?: string; error?: string } | null | void
 
@@ -25,11 +25,20 @@ export function ActionButton({
   const [asking, setAsking] = useState(false)
   const [result, setResult] = useState<Result>(null)
 
-  const run = () =>
+  // Ignore extra clicks while the action runs (a double click must not cancel or restock twice).
+  const running = useRef(false)
+  const run = () => {
+    if (running.current) return
+    running.current = true
+    setAsking(false)
     startTransition(async () => {
-      setAsking(false)
-      setResult(await action())
+      try {
+        setResult(await action())
+      } finally {
+        running.current = false
+      }
     })
+  }
 
   return (
     <div className="inline-flex flex-col items-start gap-2">

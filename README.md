@@ -26,8 +26,11 @@ Built with Next.js 16 on Vercel, Neon Postgres (through Drizzle ORM), Vercel Blo
 
 - Prices are stored in kobo, the unit Paystack charges in, and everything is charged in naira. Customers paying with an overseas card are charged in naira, and their bank converts it.
 - At checkout the server prices the bag again from the database, checks stock and the delivery fee, saves a pending order and sends the customer to Paystack's checkout page.
-- An order is only marked as paid after the server confirms the payment with Paystack's API. Both the return redirect and the webhook do this check, and running it twice is harmless. Stock goes down when the order is paid. If the amount doesn't match the order total, the order stays unpaid and a note is added for the admin.
-- Cancelling a paid order in admin puts its items back in stock. Refund the money from the Paystack dashboard.
+- Every Paystack reference the shop creates is random and recorded. Payments are matched to orders only through those references, so other payments on the same Paystack account are ignored.
+- An order is only marked as paid after the server confirms the payment with Paystack's API. Both the return redirect and the webhook do this check, and running it twice is harmless. Stock goes down when the order is paid.
+- Anything that needs a person (a customer who paid twice, a payment that arrived after a cancel, or an amount that doesn't match) shows as **Payment needs attention** on the order and the dashboard, and is emailed to the shop if emails are on.
+- If two people buy the last piece at the same moment, the second order is flagged so you can refund or restock. Cancelling a paid order puts back exactly what it took from stock. Refund the money from the Paystack dashboard.
+- An unpaid order can be paid later from its order page for 3 days, as long as the prices, stock and delivery fee haven't changed.
 
 ## Photos
 

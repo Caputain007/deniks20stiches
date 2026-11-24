@@ -68,7 +68,10 @@ export async function initializeTransaction(input: {
 export type VerifiedTransaction = {
   status: string
   reference: string
+  /** What was charged, including any Paystack fees passed on to the customer. */
   amount: number
+  /** The amount the shop asked for. Differs from `amount` when fees are passed on to the customer. */
+  requestedAmount: number | null
   currency: string
   channel: string | null
   paidAt: string | null
@@ -81,6 +84,7 @@ export async function verifyTransaction(reference: string): Promise<VerifiedTran
     status: string
     reference: string
     amount: number
+    requested_amount?: number | null
     currency: string
     channel?: string | null
     paid_at?: string | null
@@ -99,6 +103,7 @@ export async function verifyTransaction(reference: string): Promise<VerifiedTran
     status: data.status,
     reference: data.reference,
     amount: Number(data.amount),
+    requestedAmount: typeof data.requested_amount === 'number' ? data.requested_amount : null,
     currency: data.currency,
     channel: data.channel ?? null,
     paidAt: data.paid_at ?? null,

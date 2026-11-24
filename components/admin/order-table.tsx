@@ -3,7 +3,14 @@ import type { schema } from '@/lib/db'
 import { formatNaira } from '@/lib/money'
 import { formatDate, OrderBadge } from './ui'
 
-export function OrderTable({ orders }: { orders: (typeof schema.orders.$inferSelect)[] }) {
+export function OrderTable({
+  orders,
+  flagged = [],
+}: {
+  orders: (typeof schema.orders.$inferSelect)[]
+  /** Orders with a payment that needs attention. */
+  flagged?: number[]
+}) {
   return (
     <div className="-mx-5 overflow-x-auto sm:mx-0">
       <table className="w-full min-w-[36rem] text-left text-sm">
@@ -31,6 +38,9 @@ export function OrderTable({ orders }: { orders: (typeof schema.orders.$inferSel
               <td className="py-3 text-muted">{formatDate(o.createdAt)}</td>
               <td className="py-3">
                 <OrderBadge status={o.status} />
+                {flagged.includes(o.id) && (
+                  <span className="mt-1 block text-xs font-bold text-rose">Payment needs attention</span>
+                )}
               </td>
               <td className="py-3 pr-5 text-right font-semibold sm:pr-0">{formatNaira(o.totalKobo)}</td>
             </tr>

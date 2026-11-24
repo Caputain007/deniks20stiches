@@ -167,8 +167,50 @@ export const orderItems = pgTable(
     imageUrl: text('image_url').notNull().default(''),
     unitPriceKobo: kobo('unit_price_kobo').notNull(),
     quantity: integer('quantity').notNull(),
+    /** Units actually taken from stock when the order was paid (less than quantity if it oversold). */
+    stockTaken: integer('stock_taken').notNull().default(0),
   },
   (t) => [index('order_items_order_idx').on(t.orderId)],
+)
+
+/**
+ * Every Paystack reference this shop creates. A payment is only ever matched to
+ * an order through this table, so references made anywhere else are ignored.
+ */
+export const paymentAttempts = pgTable(
+  'payment_attempts',
+  {
+    reference: text('reference').primaryKey(),
+    orderId: integer('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    amountKobo: kobo('amount_kobo').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('payment_attempts_order_idx').on(t.orderId)],
+)
+
+export const PAYMENT_ISSUE_KINDS = ['duplicate', 'after_cancel', 'amount_mismatch'] as const
+export type PaymentIssueKind = (typeof PAYMENT_ISSUE_KINDS)[number]
+
+/** Payments that need an admin's attention (e.g. a refund). Never overwritten, only marked resolved. */
+export const paymentIssues = pgTable(
+  'payment_issues',
+  {
+    id: serial('id').primaryKey(),
+    orderId: integer('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    reference: text('reference').notNull(),
+    kind: text('kind', { enum: PAYMENT_ISSUE_KINDS }).notNull(),
+    message: text('message').notNull(),
+    createdAt: createdAt(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('payment_issues_unique_idx').on(t.orderId, t.reference, t.kind),
+    index('payment_issues_open_idx').on(t.resolvedAt),
+  ],
 )
 
 /** Verified payment events from Paystack, kept for troubleshooting. */
@@ -233,7 +275,14 @@ export const productVariantsRelations = relations(productVariants, ({ one }) => 
   product: one(products, { fields: [productVariants.productId], references: [products.id] }),
 }))
 
-export const ordersRelations = relations(orders, ({ many }) => ({ items: many(orderItems) }))
+export const ordersRelations = relations(orders, ({ many }) => ({
+  items: many(orderItems),
+  issues: many(paymentIssues),
+}))
+
+export const paymentIssuesRelations = relations(paymentIssues, ({ one }) => ({
+  order: one(orders, { fields: [paymentIssues.orderId], references: [orders.id] }),
+}))
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
   order: one(orders, { fields: [orderItems.orderId], references: [orders.id] }),

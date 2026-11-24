@@ -1,34 +1,38 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { and, desc, eq, ilike, or, type SQL } from 'drizzle-orm'
+import { and, desc, eq, ilike, inArray, or, type SQL } from 'drizzle-orm'
 import { OrderTable } from '@/components/admin/order-table'
 import { PageHeader, Panel } from '@/components/admin/ui'
+import { ordersWithOpenIssues } from '@/lib/admin-queries'
 import { requireAdmin } from '@/lib/auth'
 import { getDb, schema } from '@/lib/db'
 import { ORDER_STATUSES, type OrderStatus } from '@/lib/db/schema'
 
 export const metadata: Metadata = { title: 'Orders' }
 
-const TABS: { status: OrderStatus | 'all'; label: string }[] = [
+const TABS: { status: OrderStatus | 'all' | 'issues'; label: string }[] = [
   { status: 'paid', label: 'To ship' },
   { status: 'shipped', label: 'Shipped' },
   { status: 'delivered', label: 'Delivered' },
   { status: 'pending', label: 'Awaiting payment' },
   { status: 'cancelled', label: 'Cancelled' },
   { status: 'all', label: 'All' },
+  { status: 'issues', label: 'Payment issues' },
 ]
 
 export default async function OrdersPage({ searchParams }: PageProps<'/admin/orders'>) {
   await requireAdmin()
   const query = await searchParams
   const status =
-    typeof query.status === 'string' && (ORDER_STATUSES as readonly string[]).concat('all').includes(query.status)
+    typeof query.status === 'string' && [...ORDER_STATUSES, 'all', 'issues'].includes(query.status)
       ? query.status
       : 'paid'
   const q = typeof query.q === 'string' ? query.q.trim().slice(0, 100) : ''
 
+  const flagged = await ordersWithOpenIssues()
   const conditions: SQL[] = []
-  if (status !== 'all') conditions.push(eq(schema.orders.status, status as OrderStatus))
+  if (status === 'issues') conditions.push(inArray(schema.orders.id, flagged.length ? flagged : [-1]))
+  else if (status !== 'all') conditions.push(eq(schema.orders.status, status as OrderStatus))
   if (q) {
     const term = `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`
     conditions.push(
@@ -82,7 +86,7 @@ export default async function OrdersPage({ searchParams }: PageProps<'/admin/ord
         {orders.length === 0 ? (
           <p className="text-muted">{q ? `No orders match "${q}".` : 'No orders here yet.'}</p>
         ) : (
-          <OrderTable orders={orders} />
+          <OrderTable orders={orders} flagged={flagged} />
         )}
       </Panel>
     </>

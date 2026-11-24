@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { desc, eq } from 'drizzle-orm'
 import { notFound } from 'next/navigation'
-import { markShipped, saveOrderNotes, setOrderStatus } from '@/app/actions/admin-shop'
+import { markShipped, resolvePaymentIssue, saveOrderNotes, setOrderStatus } from '@/app/actions/admin-shop'
 import { ActionButton } from '@/components/admin/action-button'
 import { CopyButton, NotesForm, PrintButton, ShipForm } from '@/components/admin/order-forms'
 import { formatDate, Notice, OrderBadge, PageHeader, Panel } from '@/components/admin/ui'
@@ -24,6 +24,11 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
   if (!Number.isInteger(orderId)) notFound()
   const order = await getOrderWithItems({ id: orderId })
   if (!order) notFound()
+  const issues = await getDb()
+    .select()
+    .from(schema.paymentIssues)
+    .where(eq(schema.paymentIssues.orderId, order.id))
+    .orderBy(desc(schema.paymentIssues.createdAt))
   const events = await getDb()
     .select()
     .from(schema.paymentEvents)
@@ -60,6 +65,17 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
       </div>
 
       <div className="space-y-4">
+        {issues
+          .filter((issue) => !issue.resolvedAt)
+          .map((issue) => (
+            <Notice key={issue.id} tone="error">
+              <p className="font-semibold">Payment needs attention</p>
+              <p className="mt-1 text-ink">{issue.message}</p>
+              <div className="mt-3">
+                <ActionButton action={resolvePaymentIssue.bind(null, issue.id)}>Mark as resolved</ActionButton>
+              </div>
+            </Notice>
+          ))}
         {order.status === 'cancelled' && order.paidAt && (
           <Notice tone="warning">
             This order was paid, then cancelled, and its items went back into stock. If you haven’t refunded the
@@ -190,6 +206,13 @@ export default async function OrderDetailPage({ params }: PageProps<'/admin/orde
                   <dd className="inline">{order.paymentChannel.replace(/_/g, ' ')}</dd>
                 </div>
               )}
+              {issues
+                .filter((issue) => issue.resolvedAt)
+                .map((issue) => (
+                  <div key={issue.id} className="text-muted">
+                    Resolved {formatDate(issue.resolvedAt)}: {issue.message}
+                  </div>
+                ))}
               {events.length > 0 && (
                 <div>
                   <dt className="inline text-muted">Last Paystack event: </dt>

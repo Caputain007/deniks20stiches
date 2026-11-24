@@ -1,6 +1,6 @@
 'use server'
 
-import { and, asc, count, desc, eq, like, or } from 'drizzle-orm'
+import { and, asc, count, desc, eq, like, or, sql } from 'drizzle-orm'
 import { refresh, updateTag } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
@@ -233,6 +233,8 @@ const sizesSchema = z
       id: z.number().int().positive().nullable(),
       label: z.string().trim().min(1, 'Every size needs a name, e.g. M or 54.').max(30),
       stock: z.number().int().min(0, 'Stock can’t be negative.').max(100000),
+      /** The stock the editor showed before the admin changed it (null for new sizes). */
+      loaded: z.number().int().min(0).nullable(),
     }),
   )
   .max(40)
@@ -271,9 +273,15 @@ export async function saveSizes(productId: number, sizes: unknown): Promise<Size
     }
     for (const [position, size] of parsed.data.entries()) {
       if (size.id && existing.some((e) => e.id === size.id)) {
+        // Apply the admin's change on top of the live number, so orders paid
+        // while the page was open aren't undone.
+        const stock =
+          size.loaded === null
+            ? size.stock
+            : sql`GREATEST(${schema.productVariants.stock} + ${size.stock - size.loaded}, 0)`
         await tx
           .update(schema.productVariants)
-          .set({ label: size.label, stock: size.stock, position })
+          .set({ label: size.label, stock, position })
           .where(and(eq(schema.productVariants.id, size.id), eq(schema.productVariants.productId, productId)))
       } else {
         await tx.insert(schema.productVariants).values({ productId, label: size.label, stock: size.stock, position })
@@ -286,5 +294,17 @@ export async function saveSizes(productId: number, sizes: unknown): Promise<Size
     .from(schema.productVariants)
     .where(eq(schema.productVariants.productId, productId))
     .orderBy(asc(schema.productVariants.position), asc(schema.productVariants.id))
-  return { ok: true, message: 'Sizes and stock saved.', sizes: saved }
+  const movedOn = saved.filter((v) => {
+    const sent = parsed.data.find((p) => p.id === v.id)
+    return sent && sent.loaded !== null && v.stock !== sent.stock
+  })
+  return {
+    ok: true,
+    message: movedOn.length
+      ? `Saved. Orders came in while you were editing, so stock now shows the live numbers (${movedOn
+          .map((v) => `${v.label}: ${v.stock}`)
+          .join(', ')}).`
+      : 'Sizes and stock saved.',
+    sizes: saved,
+  }
 }

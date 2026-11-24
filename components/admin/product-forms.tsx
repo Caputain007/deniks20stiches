@@ -178,7 +178,7 @@ export function ProductDetailsForm({
   )
 }
 
-type SizeRow = { key: string; id: number | null; label: string; stock: string }
+type SizeRow = { key: string; id: number | null; label: string; stock: string; loaded: number | null }
 
 const PRESETS: { label: string; sizes: string[] }[] = [
   { label: 'S–XXL', sizes: ['S', 'M', 'L', 'XL', 'XXL'] },
@@ -198,7 +198,7 @@ export function SizesEditor({
   sizes: { id: number; label: string; stock: number }[]
 }) {
   const [rows, setRows] = useState<SizeRow[]>(
-    sizes.map((s) => ({ key: `id-${s.id}`, id: s.id, label: s.label, stock: String(s.stock) })),
+    sizes.map((s) => ({ key: `id-${s.id}`, id: s.id, label: s.label, stock: String(s.stock), loaded: s.stock })),
   )
   const [state, setState] = useState<ActionState>(null)
   const [pending, startTransition] = useTransition()
@@ -213,7 +213,7 @@ export function SizesEditor({
       const existing = new Set(current.map((r) => r.label.toLowerCase()))
       const additions = labels
         .filter((l) => !existing.has(l.toLowerCase()))
-        .map((label) => ({ key: newKey(), id: null, label, stock: '0' }))
+        .map((label) => ({ key: newKey(), id: null, label, stock: '0', loaded: null }))
       // Replace a lone untouched "One size" row when adding a size range.
       const base =
         current.length === 1 && current[0].label === 'One size' && current[0].stock === '0' && labels[0] !== 'One size'
@@ -230,6 +230,7 @@ export function SizesEditor({
         id: r.id,
         label: r.label.trim(),
         stock: Number(r.stock === '' ? 0 : r.stock),
+        loaded: r.loaded,
       }))
       if (payload.some((p) => !Number.isInteger(p.stock) || p.stock < 0)) {
         setState({ error: 'Stock must be a whole number, 0 or more.' })
@@ -237,7 +238,15 @@ export function SizesEditor({
       }
       const result: SizesState = await saveSizes(productId, payload)
       if (result?.ok && result.sizes) {
-        setRows(result.sizes.map((s) => ({ key: `id-${s.id}`, id: s.id, label: s.label, stock: String(s.stock) })))
+        setRows(
+          result.sizes.map((s) => ({
+            key: `id-${s.id}`,
+            id: s.id,
+            label: s.label,
+            stock: String(s.stock),
+            loaded: s.stock,
+          })),
+        )
       }
       setState(result)
     })
@@ -301,7 +310,7 @@ export function SizesEditor({
       <button
         type="button"
         className="mt-3 text-sm font-semibold text-plum"
-        onClick={() => setRows((r) => [...r, { key: newKey(), id: null, label: '', stock: '0' }])}
+        onClick={() => setRows((r) => [...r, { key: newKey(), id: null, label: '', stock: '0', loaded: null }])}
       >
         + Add a size
       </button>

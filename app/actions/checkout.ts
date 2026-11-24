@@ -6,7 +6,15 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { getDb, schema } from '@/lib/db'
 import { isCountryCode, NIGERIAN_STATES } from '@/lib/geo'
-import { CheckoutError, createOrder, startPayment } from '@/lib/orders'
+import {
+  cancelPendingOrder,
+  CheckoutError,
+  createOrder,
+  getOrderWithItems,
+  OrderNotPayableError,
+  pendingOrderProblem,
+  startPayment,
+} from '@/lib/orders'
 import { getOrigin } from '@/lib/origin'
 import { PaymentsNotConfiguredError, paymentsConfigured } from '@/lib/paystack'
 
@@ -49,16 +57,32 @@ export async function getBagItems(lines: unknown): Promise<BagItemDetails[]> {
   const cover = new Map<number, string>()
   for (const i of images) if (!cover.has(i.productId)) cover.set(i.productId, i.thumbUrl)
 
-  return rows.map(({ variant, product }) => ({
-    variantId: variant.id,
-    slug: product.slug,
-    name: product.name,
-    size: variant.label,
-    priceKobo: product.priceKobo,
-    imageUrl: cover.get(product.id) ?? '',
-    stock: Math.max(0, variant.stock),
-    available: product.status === 'active' && product.priceKobo > 0,
-  }))
+  return rows.map(({ variant, product }) => {
+    const live = product.status === 'active' && product.priceKobo > 0
+    // Products that aren't live (drafts, archived) reveal nothing about themselves.
+    if (!live) {
+      return {
+        variantId: variant.id,
+        slug: '',
+        name: '',
+        size: '',
+        priceKobo: 0,
+        imageUrl: '',
+        stock: 0,
+        available: false,
+      }
+    }
+    return {
+      variantId: variant.id,
+      slug: product.slug,
+      name: product.name,
+      size: variant.label,
+      priceKobo: product.priceKobo,
+      imageUrl: cover.get(product.id) ?? '',
+      stock: Math.max(0, variant.stock),
+      available: true,
+    }
+  })
 }
 
 const trimmed = (max: number) => z.string().trim().max(max)
@@ -134,12 +158,21 @@ function keyMatches(given: string, actual: string): boolean {
 
 /** "Pay now" on an unpaid order: opens a fresh Paystack checkout. */
 export async function payForOrder(number: string, key: string): Promise<PlaceOrderResult> {
-  const order = await getDb().query.orders.findFirst({ where: eq(schema.orders.number, String(number)) })
+  const order = await getOrderWithItems({ number: String(number) })
   if (!order || !keyMatches(String(key), order.accessKey)) return { ok: false, error: 'Order not found.' }
-  if (order.status !== 'pending') return { ok: false, error: 'This order has already been paid.' }
+  if (order.status !== 'pending') return { ok: false, error: 'This order is no longer waiting for payment.' }
+
+  // Prices, stock or delivery may have changed since the order was placed.
+  const problem = await pendingOrderProblem(order)
+  if (problem) {
+    await cancelPendingOrder(order.id)
+    return { ok: false, error: `${problem} Please place a new order from your bag.`, orderLink: '/bag' }
+  }
   try {
     return { ok: true, redirectTo: await startPayment(order, await getOrigin()) }
   } catch (error) {
+    if (error instanceof OrderNotPayableError)
+      return { ok: false, error: 'This order has already been paid. Refresh the page.' }
     if (!(error instanceof PaymentsNotConfiguredError)) console.error('startPayment failed', error)
     return { ok: false, error: 'We couldn’t open the payment page. Please try again in a moment.' }
   }

@@ -1,7 +1,7 @@
 import 'server-only'
 import { countryName } from './geo'
 import { formatNaira } from './money'
-import type { Order, OrderItem } from './orders'
+import type { Order, OrderItem, PaymentIssue } from './orders'
 
 // Optional: order emails are sent through Resend when RESEND_API_KEY and
 // EMAIL_FROM are set. Without them the shop works the same, just without emails.
@@ -115,5 +115,19 @@ ${tracking}
 <p style="margin-top:24px"><a href="${esc(link)}" style="color:#4c2071">View your order</a></p>`,
     ),
     shopEmail || undefined,
+  )
+}
+
+export async function sendPaymentIssueEmail(order: Order, issue: PaymentIssue, origin: string, shopEmail: string) {
+  const to = process.env.ORDER_ALERT_EMAIL || shopEmail
+  if (!to) return
+  await send(
+    to,
+    `Payment needs attention: order ${order.number}`,
+    layout(
+      `Payment needs attention`,
+      `<p style="line-height:1.6">${esc(issue.message)}</p>
+<p style="margin-top:24px"><a href="${esc(origin)}/admin/orders/${order.id}" style="color:#4c2071">Open order ${esc(order.number)} in admin</a></p>`,
+    ),
   )
 }

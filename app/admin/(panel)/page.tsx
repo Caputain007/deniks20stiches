@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { OrderTable } from '@/components/admin/order-table'
-import { PageHeader, Panel } from '@/components/admin/ui'
-import { getDashboardStats } from '@/lib/admin-queries'
+import { Notice, PageHeader, Panel } from '@/components/admin/ui'
+import { getDashboardStats, ordersWithOpenIssues } from '@/lib/admin-queries'
 import { requireAdmin } from '@/lib/auth'
 import { emailConfigured } from '@/lib/email'
 import { paymentsConfigured } from '@/lib/paystack'
@@ -9,7 +9,10 @@ import { storageMode } from '@/lib/storage'
 
 export default async function DashboardPage() {
   const admin = await requireAdmin()
-  const { toShip, awaiting, live, drafts, rates, paidWeek, recent } = await getDashboardStats()
+  const [{ toShip, awaiting, live, drafts, rates, paidWeek, recent }, flagged] = await Promise.all([
+    getDashboardStats(),
+    ordersWithOpenIssues(),
+  ])
 
   const setup = [
     {
@@ -49,6 +52,17 @@ export default async function DashboardPage() {
           Add product
         </Link>
       </PageHeader>
+
+      {flagged.length > 0 && (
+        <div className="mb-6">
+          <Notice tone="error">
+            <Link href="/admin/orders?status=issues" className="font-semibold text-rose">
+              {flagged.length === 1 ? '1 order has' : `${flagged.length} orders have`} a payment that needs attention
+            </Link>{' '}
+            <span className="text-ink">(for example a double payment to refund).</span>
+          </Notice>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat href="/admin/orders?status=paid" value={toShip} label="Orders to ship" strong={toShip > 0} />
@@ -90,7 +104,7 @@ export default async function DashboardPage() {
         {recent.length === 0 ? (
           <p className="text-muted">No orders yet. They’ll appear here as soon as someone checks out.</p>
         ) : (
-          <OrderTable orders={recent} />
+          <OrderTable orders={recent} flagged={flagged} />
         )}
         <Link href="/admin/orders?status=all" className="mt-4 inline-block text-sm font-semibold text-plum">
           All orders

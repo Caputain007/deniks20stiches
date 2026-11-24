@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { afterPaid } from '@/lib/after-paid'
+import { afterPaid, afterPaymentIssue } from '@/lib/after-paid'
 import { getDb, schema } from '@/lib/db'
 import { finalizePayment, isOurPayment } from '@/lib/orders'
 import { originFromRequest } from '@/lib/origin'
@@ -21,17 +21,9 @@ export async function POST(request: Request) {
   const reference = event.data?.reference
   if (!event.event || typeof reference !== 'string') return NextResponse.json({ ok: true })
 
-  // The same Paystack account may also take payments elsewhere (payment links, other sites). Ignore those.
-  let metadata = event.data?.metadata
-  if (typeof metadata === 'string') {
-    try {
-      metadata = JSON.parse(metadata)
-    } catch {
-      metadata = undefined
-    }
-  }
-  const orderNumber = (metadata as { order_number?: unknown } | undefined)?.order_number
-  if (!(await isOurPayment(reference, orderNumber))) return NextResponse.json({ ok: true, ignored: true })
+  // The same Paystack account may also take payments elsewhere (payment links,
+  // other sites). Only references this shop created are handled.
+  if (!(await isOurPayment(reference))) return NextResponse.json({ ok: true, ignored: true })
 
   await getDb()
     .insert(schema.paymentEvents)
@@ -54,7 +46,9 @@ export async function POST(request: Request) {
     try {
       // finalizePayment asks Paystack to confirm the payment before marking anything paid.
       const result = await finalizePayment(reference)
-      if (result?.newlyPaid) afterPaid(result.order.id, originFromRequest(request))
+      const origin = originFromRequest(request)
+      if (result?.newlyPaid) afterPaid(result.order.id, origin)
+      if (result?.newIssue) afterPaymentIssue(result.order, result.newIssue, origin)
     } catch (error) {
       console.error('Webhook could not confirm payment', reference, error)
       // A non-2xx answer makes Paystack retry later.

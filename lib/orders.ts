@@ -1,7 +1,8 @@
 import 'server-only'
 import { randomBytes } from 'node:crypto'
-import { asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { getDb, schema } from './db'
+import type { PaymentIssueKind } from './db/schema'
 import { formatNaira } from './money'
 import { initializeTransaction, verifyTransaction, type VerifiedTransaction } from './paystack'
 import { readShippingRates } from './shipping'
@@ -70,7 +71,7 @@ export async function createOrder(input: CheckoutInput): Promise<Order> {
   for (const image of images) if (!cover.has(image.productId)) cover.set(image.productId, image.thumbUrl)
 
   const problems: string[] = []
-  const items: Omit<OrderItem, 'id' | 'orderId'>[] = []
+  const items: Omit<OrderItem, 'id' | 'orderId' | 'stockTaken'>[] = []
   for (const [variantId, quantity] of wanted) {
     const row = rows.find((r) => r.variant.id === variantId)
     if (!row || row.product.status !== 'active' || row.product.priceKobo <= 0) {
@@ -139,9 +140,17 @@ export async function createOrder(input: CheckoutInput): Promise<Order> {
   }
 }
 
+/** The order is no longer waiting for payment (already paid or cancelled). */
+export class OrderNotPayableError extends Error {}
+
 /** Opens a Paystack checkout for a pending order and returns the URL to send the customer to. */
 export async function startPayment(order: Order, origin: string): Promise<string> {
-  const reference = `${order.number}-${randomCode(4)}`
+  const db = getDb()
+  // Long and random, so a reference can't be guessed. Recorded before Paystack
+  // sees it: payments are only ever matched to orders through this table.
+  const reference = `${order.number}-${randomCode(12)}`
+  await db.insert(schema.paymentAttempts).values({ reference, orderId: order.id, amountKobo: order.totalKobo })
+
   const orderLink = `${origin}/order/${order.number}?key=${order.accessKey}`
   const payment = await initializeTransaction({
     email: order.email,
@@ -154,86 +163,83 @@ export async function startPayment(order: Order, origin: string): Promise<string
       custom_fields: [{ display_name: 'Order', variable_name: 'order_number', value: order.number }],
     },
   })
-  await getDb()
+
+  // If a payment landed while Paystack was answering, don't send the customer to pay twice.
+  const [stillPending] = await db
     .update(schema.orders)
     .set({ paymentReference: reference, paymentUrl: payment.authorizationUrl, updatedAt: new Date() })
-    .where(eq(schema.orders.id, order.id))
+    .where(and(eq(schema.orders.id, order.id), eq(schema.orders.status, 'pending')))
+    .returning({ id: schema.orders.id })
+  if (!stillPending) throw new OrderNotPayableError('This order has already been paid.')
   return payment.authorizationUrl
 }
 
-function withNote(existing: string, note: string): string {
-  return existing ? `${existing}\n${note}` : note
+/** The order a reference was created for, if this shop created it. */
+export async function findPaymentAttempt(reference: string) {
+  const [attempt] = await getDb()
+    .select()
+    .from(schema.paymentAttempts)
+    .where(eq(schema.paymentAttempts.reference, reference))
+  return attempt ?? null
 }
 
-/** Whether a Paystack reference (or the order number in its metadata) belongs to one of this shop's orders. */
-export async function isOurPayment(reference: string, orderNumber: unknown): Promise<boolean> {
-  const db = getDb()
-  const [byRef] = await db
-    .select({ id: schema.orders.id })
-    .from(schema.orders)
-    .where(eq(schema.orders.paymentReference, reference))
-  if (byRef) return true
-  if (typeof orderNumber !== 'string' || !reference.startsWith(`${orderNumber}-`)) return false
-  const [byNumber] = await db.select({ id: schema.orders.id }).from(schema.orders).where(eq(schema.orders.number, orderNumber))
-  return Boolean(byNumber)
+/** Whether a Paystack reference was created by this shop. */
+export async function isOurPayment(reference: string): Promise<boolean> {
+  return Boolean(await findPaymentAttempt(reference))
 }
 
-export type FinalizeResult = { order: Order; newlyPaid: boolean }
+export type PaymentIssue = { kind: PaymentIssueKind; message: string }
+export type FinalizeResult = { order: Order; newlyPaid: boolean; newIssue: PaymentIssue | null }
 
 /**
  * Marks an order paid once Paystack confirms it. Safe to call many times for the
- * same payment (redirect, webhook and retries all land here).
+ * same payment (redirect, webhook and retries all land here). Payments that need
+ * a refund or a check are recorded as payment issues for the admin.
  */
 export async function finalizePayment(
   reference: string,
   verified?: VerifiedTransaction,
 ): Promise<FinalizeResult | null> {
+  const attempt = await findPaymentAttempt(reference)
+  if (!attempt) return null // not a reference this shop created: ignore it
   const txn = verified ?? (await verifyTransaction(reference))
   const db = getDb()
 
   return db.transaction(async (tx) => {
-    let [order] = await tx
-      .select()
-      .from(schema.orders)
-      .where(eq(schema.orders.paymentReference, reference))
-      .for('update')
-    const metaNumber = typeof txn.metadata?.order_number === 'string' ? txn.metadata.order_number : null
-    if (!order && metaNumber) {
-      ;[order] = await tx.select().from(schema.orders).where(eq(schema.orders.number, metaNumber)).for('update')
-    }
+    const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, attempt.orderId)).for('update')
     if (!order) return null
-    if (txn.status !== 'success') return { order, newlyPaid: false }
+    if (txn.status !== 'success' || txn.reference !== reference) return { order, newlyPaid: false, newIssue: null }
 
-    const addNote = async (note: string) => {
-      if (order.adminNotes.includes(reference)) return order
-      const [updated] = await tx
-        .update(schema.orders)
-        .set({ adminNotes: withNote(order.adminNotes, note), updatedAt: new Date() })
-        .where(eq(schema.orders.id, order.id))
-        .returning()
-      return updated
+    const raise = async (kind: PaymentIssueKind, message: string): Promise<FinalizeResult> => {
+      const [created] = await tx
+        .insert(schema.paymentIssues)
+        .values({ orderId: order.id, reference, kind, message })
+        .onConflictDoNothing()
+        .returning({ id: schema.paymentIssues.id })
+      return { order, newlyPaid: false, newIssue: created ? { kind, message } : null }
     }
+
+    // With "pass fees to customer" on, Paystack charges more than the shop asked for.
+    const paidFor = txn.requestedAmount ?? txn.amount
 
     if (order.status === 'cancelled') {
-      const updated = await addNote(
-        `Payment ${reference} (${formatNaira(txn.amount)}) arrived after this order was cancelled. Refund it in Paystack or reopen the order.`,
+      return raise(
+        'after_cancel',
+        `A payment of ${formatNaira(txn.amount)} (Paystack reference ${reference}) arrived after this order was cancelled. Refund it in your Paystack dashboard.`,
       )
-      return { order: updated, newlyPaid: false }
     }
     if (order.status !== 'pending') {
-      if (order.paymentReference !== reference) {
-        const updated = await addNote(
-          `A second payment (${reference}, ${formatNaira(txn.amount)}) was made for this order. Refund one of them in Paystack.`,
-        )
-        return { order: updated, newlyPaid: false }
-      }
-      return { order, newlyPaid: false }
-    }
-    if (txn.currency !== order.currency || txn.amount !== order.totalKobo) {
-      const updated = await addNote(
-        `Payment ${reference} was ${formatNaira(txn.amount)} ${txn.currency}, but the order total is ${formatNaira(order.totalKobo)}. It was not marked as paid; check it in Paystack.`,
+      if (order.paymentReference === reference) return { order, newlyPaid: false, newIssue: null } // already handled
+      return raise(
+        'duplicate',
+        `The customer paid twice. A second payment of ${formatNaira(txn.amount)} (Paystack reference ${reference}) came in after the order was paid. Refund it in your Paystack dashboard.`,
       )
-      return { order: updated, newlyPaid: false }
+    }
+    if (txn.currency !== order.currency || paidFor !== order.totalKobo) {
+      return raise(
+        'amount_mismatch',
+        `A payment of ${formatNaira(paidFor)} ${txn.currency} (Paystack reference ${reference}) doesn't match the order total of ${formatNaira(order.totalKobo)}, so the order wasn't marked as paid. Check it in your Paystack dashboard.`,
+      )
     }
 
     const items = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.orderId, order.id))
@@ -245,10 +251,15 @@ export async function finalizePayment(
         .set({ stock: sql`${schema.productVariants.stock} - ${item.quantity}` })
         .where(eq(schema.productVariants.id, item.variantId))
         .returning({ stock: schema.productVariants.stock })
-      if (variant && variant.stock < 0) {
+      if (!variant) continue
+      // Units that really came out of stock: fewer than ordered if it oversold.
+      let taken = item.quantity
+      if (variant.stock < 0) {
         stockIssue = true
+        taken = Math.max(0, item.quantity + variant.stock)
         await tx.update(schema.productVariants).set({ stock: 0 }).where(eq(schema.productVariants.id, item.variantId))
       }
+      await tx.update(schema.orderItems).set({ stockTaken: taken }).where(eq(schema.orderItems.id, item.id))
     }
 
     const [updated] = await tx
@@ -263,8 +274,51 @@ export async function finalizePayment(
       })
       .where(eq(schema.orders.id, order.id))
       .returning()
-    return { order: updated, newlyPaid: true }
+    return { order: updated, newlyPaid: true, newIssue: null }
   })
+}
+
+const PENDING_ORDER_DAYS = 3
+
+/**
+ * Before a pending order is paid later (from its order page), check it still
+ * matches the shop: not too old, items available at the same price, and the
+ * same delivery fee. Returns what changed, or null if it can still be paid.
+ */
+export async function pendingOrderProblem(order: Order & { items: OrderItem[] }): Promise<string | null> {
+  if (Date.now() - order.createdAt.getTime() > PENDING_ORDER_DAYS * 86_400_000) {
+    return 'This order has expired.'
+  }
+  const db = getDb()
+  const variantIds = order.items.map((i) => i.variantId).filter((id): id is number => id !== null)
+  if (variantIds.length !== order.items.length) return 'An item in this order is no longer available.'
+  const rows = await db
+    .select({ variant: schema.productVariants, product: schema.products })
+    .from(schema.productVariants)
+    .innerJoin(schema.products, eq(schema.products.id, schema.productVariants.productId))
+    .where(inArray(schema.productVariants.id, variantIds))
+  for (const item of order.items) {
+    const row = rows.find((r) => r.variant.id === item.variantId)
+    if (!row || row.product.status !== 'active') return `${item.productName} is no longer available.`
+    if (row.product.priceKobo !== item.unitPriceKobo) return `The price of ${item.productName} has changed.`
+    if (row.variant.stock < item.quantity)
+      return `${item.productName} (${item.variantLabel}) no longer has enough stock.`
+  }
+  const rate = findRate(
+    await readShippingRates(),
+    order.shipCountry,
+    order.shipCountry === 'NG' ? order.shipRegion : '',
+  )
+  if (!rate || rate.feeKobo !== order.shippingKobo) return 'The delivery fee for this address has changed.'
+  return null
+}
+
+/** Cancels a pending order that can no longer be paid as it stands. */
+export async function cancelPendingOrder(orderId: number): Promise<void> {
+  await getDb()
+    .update(schema.orders)
+    .set({ status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(schema.orders.id, orderId), eq(schema.orders.status, 'pending')))
 }
 
 export async function getOrderWithItems(where: { id: number } | { number: string }) {

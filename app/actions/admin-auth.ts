@@ -1,6 +1,7 @@
 'use server'
 
-import { and, count, eq, gte, lt, ne, or, sql } from 'drizzle-orm'
+import { createHash, timingSafeEqual } from 'node:crypto'
+import { and, count, eq, gte, lt, ne, sql } from 'drizzle-orm'
 import { refresh } from 'next/cache'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
@@ -11,35 +12,59 @@ import { getDb, schema } from '@/lib/db'
 export type FormState = { ok?: boolean; message?: string; error?: string } | null
 
 const WINDOW_MS = 15 * 60_000
-const MAX_FAILURES = 5
+// Failed sign-ins allowed per 15 minutes: from one address for one email, from one address in
+// total, and for one email from anywhere (high enough that strangers can't lock the owner out easily).
+const LIMIT_EMAIL_AND_IP = 5
+const LIMIT_IP = 10
+const LIMIT_EMAIL = 30
+// A well-formed scrypt hash that no password matches.
+const DUMMY_HASH = `scrypt$16384$8$1$${Buffer.alloc(16, 1).toString('base64')}$${Buffer.alloc(64, 7).toString('base64')}`
 
 async function clientIp(): Promise<string> {
   const h = await headers()
   return h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown'
 }
 
+function sameSecret(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest()
+  const hb = createHash('sha256').update(b).digest()
+  return timingSafeEqual(ha, hb)
+}
+
 export async function login(_prev: FormState, formData: FormData): Promise<FormState> {
   const email = String(formData.get('email') ?? '')
     .trim()
     .toLowerCase()
-  const password = String(formData.get('password') ?? '')
+    .slice(0, 254)
+  const password = String(formData.get('password') ?? '').slice(0, 200)
   if (!email || !password) return { error: 'Enter your email and password.' }
 
   const db = getDb()
   const ip = await clientIp()
   const since = new Date(Date.now() - WINDOW_MS)
 
-  const [{ failures }] = await db
-    .select({ failures: count() })
-    .from(schema.loginAttempts)
-    .where(
-      and(
-        eq(schema.loginAttempts.success, false),
-        gte(schema.loginAttempts.createdAt, since),
-        or(eq(schema.loginAttempts.ip, ip), eq(schema.loginAttempts.email, email)),
-      ),
-    )
-  if (failures >= MAX_FAILURES) {
+  // Record the attempt before checking it, so parallel guesses all count.
+  const [attempt] = await db
+    .insert(schema.loginAttempts)
+    .values({ ip, email, success: false })
+    .returning({ id: schema.loginAttempts.id })
+  const failed = and(eq(schema.loginAttempts.success, false), gte(schema.loginAttempts.createdAt, since))
+  const [[byPair], [byIp], [byEmail]] = await Promise.all([
+    db
+      .select({ n: count() })
+      .from(schema.loginAttempts)
+      .where(and(failed, eq(schema.loginAttempts.ip, ip), eq(schema.loginAttempts.email, email))),
+    db
+      .select({ n: count() })
+      .from(schema.loginAttempts)
+      .where(and(failed, eq(schema.loginAttempts.ip, ip))),
+    db
+      .select({ n: count() })
+      .from(schema.loginAttempts)
+      .where(and(failed, eq(schema.loginAttempts.email, email))),
+  ])
+  // Each count includes this attempt.
+  if (byPair.n > LIMIT_EMAIL_AND_IP || byIp.n > LIMIT_IP || byEmail.n > LIMIT_EMAIL) {
     return { error: 'Too many attempts. Wait 15 minutes, then try again.' }
   }
 
@@ -55,7 +80,7 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
       bootstrapEmail &&
       bootstrapPassword &&
       email === bootstrapEmail &&
-      password === bootstrapPassword
+      sameSecret(password, bootstrapPassword)
     ) {
       ;[admin] = await db
         .insert(schema.adminUsers)
@@ -66,8 +91,9 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
     }
   }
 
-  const ok = admin ? await verifyPassword(password, admin.passwordHash) : false
-  await db.insert(schema.loginAttempts).values({ ip, email, success: ok })
+  // Unknown emails are checked against a dummy hash, so the response time doesn't reveal which emails are admins.
+  const ok = (await verifyPassword(password, admin?.passwordHash ?? DUMMY_HASH)) && Boolean(admin)
+  if (ok) await db.update(schema.loginAttempts).set({ success: true }).where(eq(schema.loginAttempts.id, attempt.id))
   // Keep the table small: forget attempts older than a day.
   await db.delete(schema.loginAttempts).where(lt(schema.loginAttempts.createdAt, new Date(Date.now() - 86_400_000)))
 

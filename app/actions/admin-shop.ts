@@ -1,6 +1,6 @@
 'use server'
 
-import { asc, count, eq, sql } from 'drizzle-orm'
+import { and, asc, count, eq, isNull, sql } from 'drizzle-orm'
 import { refresh, updateTag } from 'next/cache'
 import { after } from 'next/server'
 import { z } from 'zod'
@@ -122,26 +122,30 @@ export async function markShipped(orderId: number, _prev: ActionState, formData:
     trackingUrl: formData.get('trackingUrl') ?? '',
   })
   if (!parsed.success) return { error: parsed.error.issues[0].message }
-  const db = getDb()
-  const [order] = await db.select().from(schema.orders).where(eq(schema.orders.id, orderId))
-  if (!order) return { error: 'Order not found.' }
-  if (order.status !== 'paid' && order.status !== 'shipped')
-    return { error: 'Only paid orders can be marked as shipped.' }
 
-  const [updated] = await db
-    .update(schema.orders)
-    .set({ ...parsed.data, status: 'shipped', shippedAt: order.shippedAt ?? new Date(), updatedAt: new Date() })
-    .where(eq(schema.orders.id, orderId))
-    .returning()
+  // Lock the order so a payment, a cancel or a double click can't interleave with this change.
+  const result = await getDb().transaction(async (tx) => {
+    const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, orderId)).for('update')
+    if (!order) return { error: 'Order not found.' } as const
+    if (order.status !== 'paid' && order.status !== 'shipped') {
+      return { error: 'Only paid orders can be marked as shipped.' } as const
+    }
+    const [updated] = await tx
+      .update(schema.orders)
+      .set({ ...parsed.data, status: 'shipped', shippedAt: order.shippedAt ?? new Date(), updatedAt: new Date() })
+      .where(eq(schema.orders.id, orderId))
+      .returning()
+    return { updated, wasShipped: order.status === 'shipped' } as const
+  })
+  if ('error' in result) return { error: result.error }
 
-  const notify = formData.get('notify') === 'on'
-  if (notify) {
+  if (formData.get('notify') === 'on') {
     const origin = await getOrigin()
     const settings = await getSettings()
-    after(() => sendOrderShippedEmail(updated, origin, settings.email))
+    after(() => sendOrderShippedEmail(result.updated, origin, settings.email))
   }
   refresh()
-  return { ok: true, message: order.status === 'shipped' ? 'Tracking details updated.' : 'Marked as shipped.' }
+  return { ok: true, message: result.wasShipped ? 'Tracking details updated.' : 'Marked as shipped.' }
 }
 
 export async function setOrderStatus(
@@ -149,65 +153,81 @@ export async function setOrderStatus(
   status: 'delivered' | 'cancelled' | 'paid',
 ): Promise<ActionState> {
   await requireAdmin()
-  const db = getDb()
-  const [order] = await db.select().from(schema.orders).where(eq(schema.orders.id, orderId))
-  if (!order) return { error: 'Order not found.' }
+  if (!['delivered', 'cancelled', 'paid'].includes(status)) return { error: 'Unknown status.' }
 
-  if (status === 'delivered') {
-    if (order.status !== 'shipped' && order.status !== 'paid')
-      return { error: 'Only paid or shipped orders can be delivered.' }
-    await db
-      .update(schema.orders)
-      .set({ status: 'delivered', deliveredAt: new Date(), updatedAt: new Date() })
-      .where(eq(schema.orders.id, orderId))
-    refresh()
-    return { ok: true, message: 'Marked as delivered.' }
-  }
+  const outcome = await getDb().transaction(async (tx): Promise<ActionState & { restocked?: boolean }> => {
+    // Lock the order: a webhook marking it paid, or a second click, waits for this change.
+    const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, orderId)).for('update')
+    if (!order) return { error: 'Order not found.' }
 
-  if (status === 'cancelled') {
-    if (order.status === 'cancelled') return { ok: true }
-    if (order.status !== 'pending' && order.status !== 'paid') {
-      return { error: 'Shipped orders can’t be cancelled here. Handle the return with the customer.' }
+    if (status === 'delivered') {
+      if (order.status !== 'shipped' && order.status !== 'paid') {
+        return { error: 'Only paid or shipped orders can be marked as delivered.' }
+      }
+      await tx
+        .update(schema.orders)
+        .set({ status: 'delivered', deliveredAt: new Date(), updatedAt: new Date() })
+        .where(eq(schema.orders.id, orderId))
+      return { ok: true, message: 'Marked as delivered.' }
     }
-    await db.transaction(async (tx) => {
-      // A paid order took stock when it was paid; give it back.
+
+    if (status === 'cancelled') {
+      if (order.status === 'cancelled') return { ok: true, message: 'Order cancelled.' }
+      if (order.status !== 'pending' && order.status !== 'paid') {
+        return { error: 'Shipped orders can’t be cancelled here. Handle the return with the customer.' }
+      }
       if (order.status === 'paid') {
+        // Put back exactly what this order took from stock (less than ordered if it oversold).
         const items = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.orderId, orderId))
         for (const item of items) {
-          if (item.variantId) {
+          if (item.variantId && item.stockTaken > 0) {
             await tx
               .update(schema.productVariants)
-              .set({ stock: sql`${schema.productVariants.stock} + ${item.quantity}` })
+              .set({ stock: sql`${schema.productVariants.stock} + ${item.stockTaken}` })
               .where(eq(schema.productVariants.id, item.variantId))
           }
+          await tx.update(schema.orderItems).set({ stockTaken: 0 }).where(eq(schema.orderItems.id, item.id))
         }
       }
       await tx
         .update(schema.orders)
         .set({ status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.orders.id, orderId))
-    })
-    if (order.status === 'paid') updateTag(CATALOG_TAG)
-    refresh()
-    return {
-      ok: true,
-      message:
-        order.status === 'paid'
-          ? 'Order cancelled and its items put back in stock. Refund the customer from your Paystack dashboard.'
-          : 'Order cancelled.',
+      return order.status === 'paid'
+        ? {
+            ok: true,
+            restocked: true,
+            message:
+              'Order cancelled and its items put back in stock. Refund the customer from your Paystack dashboard.',
+          }
+        : { ok: true, message: 'Order cancelled.' }
     }
-  }
 
-  // Undo a mistaken "delivered": back to shipped (or paid if it never shipped).
-  if (status === 'paid' && order.status === 'delivered') {
-    await db
-      .update(schema.orders)
-      .set({ status: order.shippedAt ? 'shipped' : 'paid', deliveredAt: null, updatedAt: new Date() })
-      .where(eq(schema.orders.id, orderId))
-    refresh()
-    return { ok: true, message: 'Delivery undone.' }
-  }
-  return { error: 'That change isn’t possible for this order.' }
+    // Undo a mistaken "delivered": back to shipped (or paid if it never shipped).
+    if (order.status === 'delivered') {
+      await tx
+        .update(schema.orders)
+        .set({ status: order.shippedAt ? 'shipped' : 'paid', deliveredAt: null, updatedAt: new Date() })
+        .where(eq(schema.orders.id, orderId))
+      return { ok: true, message: 'Delivery undone.' }
+    }
+    return { error: 'That change isn’t possible for this order.' }
+  })
+
+  if (outcome?.restocked) updateTag(CATALOG_TAG)
+  if (outcome?.ok) refresh()
+  return outcome ? { ok: outcome.ok, message: outcome.message, error: outcome.error } : null
+}
+
+/** Marks a payment issue (refund, duplicate, wrong amount) as dealt with. */
+export async function resolvePaymentIssue(issueId: number): Promise<ActionState> {
+  await requireAdmin()
+  await getDb()
+    .update(schema.paymentIssues)
+    .set({ resolvedAt: new Date() })
+    .where(and(eq(schema.paymentIssues.id, issueId), isNull(schema.paymentIssues.resolvedAt)))
+  refresh()
+  return { ok: true, message: 'Marked as resolved.' }
 }
 
 export async function saveOrderNotes(orderId: number, _prev: ActionState, formData: FormData): Promise<ActionState> {

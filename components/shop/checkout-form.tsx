@@ -250,8 +250,10 @@ export function CheckoutForm({
                 {item?.imageUrl && <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="font-semibold">{item?.name ?? 'Unavailable item'}</p>
-                <p className="text-muted">{item ? `Size ${item.size}, qty ${quantity}` : `Qty ${quantity}`}</p>
+                <p className="font-semibold">{item?.available ? item.name : 'No longer available'}</p>
+                <p className="text-muted">
+                  {item?.available ? `Size ${item.size}, qty ${quantity}` : `Qty ${quantity}`}
+                </p>
               </div>
               <p>{item?.available ? formatNaira(item.priceKobo * quantity) : ''}</p>
             </li>

@@ -35,25 +35,22 @@ export function BagView() {
                 {item?.imageUrl && <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />}
               </div>
               <div className="flex min-w-0 flex-1 flex-col">
-                {item ? (
+                {item?.available ? (
                   <>
                     <Link href={`/products/${item.slug}`} className="font-semibold no-underline hover:text-plum">
                       {item.name}
                     </Link>
                     <p className="text-sm text-muted">Size {item.size}</p>
                     <p className="mt-1 text-sm">{formatNaira(item.priceKobo)}</p>
-                    {!item.available && <p className="mt-1 text-sm font-semibold text-rose">No longer available</p>}
-                    {item.available && item.stock === 0 && (
-                      <p className="mt-1 text-sm font-semibold text-rose">Sold out</p>
-                    )}
-                    {item.available && item.stock > 0 && item.stock < quantity && (
+                    {item.stock === 0 && <p className="mt-1 text-sm font-semibold text-rose">Sold out</p>}
+                    {item.stock > 0 && item.stock < quantity && (
                       <p className="mt-1 text-sm font-semibold text-rose">
                         Only {item.stock} left. Lower the quantity to continue.
                       </p>
                     )}
                   </>
                 ) : (
-                  <p className="font-semibold text-rose">This item is no longer available</p>
+                  <p className="font-semibold text-rose">This item is no longer available. Remove it to continue.</p>
                 )}
                 <div className="mt-auto flex items-center gap-4 pt-3">
                   <label className="sr-only" htmlFor={`qty-${variantId}`}>

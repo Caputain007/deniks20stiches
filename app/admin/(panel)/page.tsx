@@ -20,7 +20,7 @@ export default async function DashboardPage() {
     {
       done: storageMode() !== 'none',
       label: 'Photo storage',
-      todo: 'In Vercel → Storage, create a Blob store and connect it to this project, then redeploy.',
+      todo: 'In Vercel → Storage, create a public Blob store and connect it to this project with a read-write token, then redeploy.',
     },
     {
       done: rates > 0,

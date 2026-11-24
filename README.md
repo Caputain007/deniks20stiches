@@ -10,8 +10,8 @@ Built with Next.js 16 on Vercel, Neon Postgres (through Drizzle ORM), Vercel Blo
 ## Put it online (one time)
 
 1. **Import the repo.** In Vercel go to **Add New → Project** and import `Caputain007/deniks20stiches`. Keep the defaults. The first deployment fails because there's no database yet. That's expected.
-2. **Database.** In the project, open **Storage → Create Database → Neon** and connect it to the project for all environments. This adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
-3. **Photo storage.** Open **Storage → Create → Blob**, choose **public** access and connect it to the project. This adds `BLOB_READ_WRITE_TOKEN`.
+2. **Database.** In the project, open **Storage → Create Database → Neon** and connect it to the project for all environments. This adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED`. Pick a European region such as Frankfurt (AWS `eu-central-1`), which is closer to Nigeria than the US. Then set the same place under **Settings → Functions → Function Regions** (Frankfurt, `fra1`), so the server and the database sit side by side.
+3. **Photo storage.** Open **Storage → Create → Blob**, choose **Public** access, connect it to the project and tick **Add a read-write token env var to this connection**. This adds `BLOB_READ_WRITE_TOKEN`, which photo uploads need.
 4. **Environment variables.** In **Settings → Environment Variables**, add the values listed in [`.env.example`](.env.example):
    - `AUTH_SECRET`: a random string of 32+ characters (`openssl rand -base64 32`)
    - `ADMIN_EMAIL` and `ADMIN_PASSWORD`: the first admin sign-in

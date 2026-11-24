@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { afterPaid } from '@/lib/after-paid'
 import { getDb, schema } from '@/lib/db'
-import { finalizePayment } from '@/lib/orders'
+import { finalizePayment, isOurPayment } from '@/lib/orders'
 import { originFromRequest } from '@/lib/origin'
 import { verifyWebhookSignature } from '@/lib/paystack'
 
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid signature' }, { status: 401 })
   }
 
-  let event: { event?: string; data?: { reference?: string } }
+  let event: { event?: string; data?: Record<string, unknown> & { reference?: string } }
   try {
     event = JSON.parse(raw.toString('utf8'))
   } catch {
@@ -21,9 +21,33 @@ export async function POST(request: Request) {
   const reference = event.data?.reference
   if (!event.event || typeof reference !== 'string') return NextResponse.json({ ok: true })
 
+  // The same Paystack account may also take payments elsewhere (payment links, other sites). Ignore those.
+  let metadata = event.data?.metadata
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata)
+    } catch {
+      metadata = undefined
+    }
+  }
+  const orderNumber = (metadata as { order_number?: unknown } | undefined)?.order_number
+  if (!(await isOurPayment(reference, orderNumber))) return NextResponse.json({ ok: true, ignored: true })
+
   await getDb()
     .insert(schema.paymentEvents)
-    .values({ reference, event: event.event, payload: event })
+    // Keep only what helps with troubleshooting; skip card and customer details.
+    .values({
+      reference,
+      event: event.event,
+      payload: {
+        status: event.data?.status,
+        amount: event.data?.amount,
+        currency: event.data?.currency,
+        channel: event.data?.channel,
+        paid_at: event.data?.paid_at,
+        gateway_response: event.data?.gateway_response,
+      },
+    })
     .catch((error) => console.error('Could not log Paystack event', error))
 
   if (event.event === 'charge.success') {

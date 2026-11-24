@@ -165,6 +165,19 @@ function withNote(existing: string, note: string): string {
   return existing ? `${existing}\n${note}` : note
 }
 
+/** Whether a Paystack reference (or the order number in its metadata) belongs to one of this shop's orders. */
+export async function isOurPayment(reference: string, orderNumber: unknown): Promise<boolean> {
+  const db = getDb()
+  const [byRef] = await db
+    .select({ id: schema.orders.id })
+    .from(schema.orders)
+    .where(eq(schema.orders.paymentReference, reference))
+  if (byRef) return true
+  if (typeof orderNumber !== 'string' || !reference.startsWith(`${orderNumber}-`)) return false
+  const [byNumber] = await db.select({ id: schema.orders.id }).from(schema.orders).where(eq(schema.orders.number, orderNumber))
+  return Boolean(byNumber)
+}
+
 export type FinalizeResult = { order: Order; newlyPaid: boolean }
 
 /**

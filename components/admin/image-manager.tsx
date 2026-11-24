@@ -166,8 +166,8 @@ export function ImageManager({
 
       {mode === 'none' && (
         <p className="mb-4 border border-dashed border-amber bg-white px-4 py-3 text-sm text-amber">
-          Photo uploads need a Vercel Blob store. In Vercel, open Storage, create a Blob store, connect it to this
-          project, then redeploy.
+          Photo uploads need a Vercel Blob store. In Vercel, open Storage, create a public Blob store, connect it to
+          this project with a read-write token, then redeploy.
         </p>
       )}
 

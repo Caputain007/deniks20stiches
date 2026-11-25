@@ -10,7 +10,7 @@ const linkClass =
   'whitespace-nowrap py-3 no-underline decoration-plum decoration-dashed decoration-[1.5px] underline-offset-[7px] hover:underline aria-[current=page]:text-plum aria-[current=page]:underline'
 
 const navClass =
-  'snap-strip relative flex items-center gap-x-6 overflow-x-auto pr-8 text-[0.95rem] [mask-image:linear-gradient(to_right,black_calc(100%-3rem),transparent)] md:gap-x-7 lg:pr-0 lg:[mask-image:none]'
+  'snap-strip relative flex items-center gap-x-6 overflow-x-auto pr-8 text-[1.0625rem] font-bold [mask-image:linear-gradient(to_right,black_calc(100%-3rem),transparent)] md:gap-x-7 lg:pr-0 lg:[mask-image:none] xl:text-[1.125rem]'
 
 function isCurrent(pathname: string, href: string) {
   return href === '/shop' ? pathname === '/shop' : pathname === href || pathname.startsWith(`${href}/`)
